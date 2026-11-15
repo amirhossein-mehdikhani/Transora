@@ -104,12 +104,12 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
         // Determine target tab
         let tabId = message.tabId || sender.tab?.id;
         if (!tabId) {
-          const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
           tabId = activeTab?.id;
         }
 
         if (!tabId) {
-          throw new Error('No active tab found to dub.');
+          throw new Error('No active video tab found to dub.');
         }
 
         broadcastState({
@@ -123,9 +123,14 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
         const streamId = await new Promise<string>((resolve, reject) => {
           chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id) => {
             if (chrome.runtime.lastError) {
-              reject(chrome.runtime.lastError);
+              const errMsg = chrome.runtime.lastError.message || '';
+              if (errMsg.includes('Extension has not been invoked') || errMsg.includes('activeTab')) {
+                reject(new Error('Please click the Transora icon in your Chrome toolbar (or press Alt+Shift+D) to activate audio on this tab.'));
+              } else {
+                reject(new Error(errMsg));
+              }
             } else if (!id) {
-              reject(new Error('Failed to obtain stream ID'));
+              reject(new Error('Failed to obtain stream ID from tab.'));
             } else {
               resolve(id);
             }
@@ -151,11 +156,62 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
 
         return { success: true };
       } catch (err: any) {
-        console.error('Failed to start dubbing:', err);
+        console.warn('Tab audio capture notice:', err.message);
         broadcastState({
           ...currentState,
           status: 'error',
           errorMessage: err.message || 'Failed to start tab audio capture',
+        });
+        return { success: false, error: err.message };
+      }
+    }
+
+    case 'START_DUBBING_WITH_STREAM': {
+      try {
+        const settings = await getStoredSettings();
+        currentSettings = settings;
+
+        if (!settings.googleApiKey) {
+          broadcastState({
+            ...currentState,
+            status: 'error',
+            errorMessage: 'Please enter your Google API Key in Settings to start dubbing.',
+          });
+          return { success: false, error: 'Missing API key' };
+        }
+
+        const tabId = message.tabId;
+        broadcastState({
+          ...currentState,
+          status: 'initializing',
+          activeTabId: tabId,
+          errorMessage: undefined,
+        });
+
+        // Ensure Offscreen Document is running
+        await setupOffscreenDocument('src/offscreen/index.html');
+
+        // Send streamId directly to offscreen document
+        chrome.runtime.sendMessage({
+          type: 'OFFSCREEN_START_CAPTURE',
+          streamId: message.streamId,
+          settings: currentSettings,
+          tabId,
+        });
+
+        broadcastState({
+          ...currentState,
+          status: 'dubbing',
+          activeTabId: tabId,
+        });
+
+        return { success: true };
+      } catch (err: any) {
+        console.error('Failed to start dubbing with stream:', err);
+        broadcastState({
+          ...currentState,
+          status: 'error',
+          errorMessage: err.message || 'Failed to start audio stream',
         });
         return { success: false, error: err.message };
       }
@@ -237,3 +293,25 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
       return null;
   }
 }
+
+// Global Keyboard Shortcut handler (Alt+Shift+D)
+chrome.commands?.onCommand?.addListener(async (command) => {
+  if (command === 'toggle-dubbing') {
+    if (currentState.status === 'dubbing' || currentState.status === 'listening') {
+      handleMessage({ type: 'STOP_DUBBING' }, {} as any);
+    } else {
+      const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      if (activeTab?.id) {
+        chrome.tabCapture.getMediaStreamId({ targetTabId: activeTab.id }, (streamId) => {
+          if (streamId) {
+            handleMessage({
+              type: 'START_DUBBING_WITH_STREAM',
+              streamId,
+              tabId: activeTab.id!,
+            }, {} as any);
+          }
+        });
+      }
+    }
+  }
+});

@@ -167,6 +167,15 @@ export const DynamicIslandHUD: React.FC<DynamicIslandHUDProps> = ({
               </span>
             </button>
 
+            {/* Error or Activation Notice */}
+            {state.status === 'error' && state.errorMessage && (
+              <div className="p-2.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-200 text-[11px] leading-snug">
+                <p className="font-semibold text-amber-300">Tab Audio Notice:</p>
+                <p className="mt-0.5">{state.errorMessage}</p>
+                <p className="mt-1 text-[10px] text-amber-400 font-mono">Shortcut: Alt+Shift+D</p>
+              </div>
+            )}
+
             {/* Target Language Dropdown */}
             <div className="relative">
               <div className="flex items-center justify-between text-xs text-slate-300 mb-1">

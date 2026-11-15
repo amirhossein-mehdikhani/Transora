@@ -75,7 +75,36 @@ export default function PopupApp() {
     if (isActive) {
       chrome.runtime.sendMessage({ type: 'STOP_DUBBING' });
     } else {
-      chrome.runtime.sendMessage({ type: 'START_DUBBING' });
+      chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+        const currentTab = tabs[0];
+        if (!currentTab || !currentTab.id) {
+          console.error('No active tab found');
+          return;
+        }
+
+        if (currentTab.url?.startsWith('chrome://') || currentTab.url?.startsWith('chrome-extension://')) {
+          alert('Cannot dub internal Chrome system pages (chrome://). Please navigate to YouTube, Meet, or any video webpage.');
+          return;
+        }
+
+        // Invoke tabCapture synchronously within the popup click gesture
+        chrome.tabCapture.getMediaStreamId({ targetTabId: currentTab.id }, (streamId) => {
+          if (chrome.runtime.lastError || !streamId) {
+            console.warn('tabCapture error:', chrome.runtime.lastError?.message);
+            chrome.runtime.sendMessage({
+              type: 'START_DUBBING',
+              tabId: currentTab.id,
+            });
+            return;
+          }
+
+          chrome.runtime.sendMessage({
+            type: 'START_DUBBING_WITH_STREAM',
+            streamId,
+            tabId: currentTab.id,
+          });
+        });
+      });
     }
   };
 

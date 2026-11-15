@@ -168,6 +168,7 @@ export interface DubbingState {
 
 export type ExtensionMessage =
   | { type: 'START_DUBBING'; tabId?: number }
+  | { type: 'START_DUBBING_WITH_STREAM'; streamId: string; tabId: number }
   | { type: 'STOP_DUBBING' }
   | { type: 'GET_STATE' }
   | { type: 'STATE_CHANGED'; state: DubbingState }
