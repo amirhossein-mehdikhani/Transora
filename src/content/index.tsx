@@ -67,6 +67,22 @@ function initTransoraContent() {
           }));
         } else if (msg.type === 'SETTINGS_UPDATED') {
           setSettings(msg.settings);
+        } else if (msg.type === 'PLAY_SPEECH_FALLBACK') {
+          if ('speechSynthesis' in window) {
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(msg.text);
+            utterance.lang = msg.lang === 'fa' ? 'fa-IR' : (msg.lang || 'en-US');
+            utterance.rate = msg.speed || 1.0;
+            utterance.onend = () => {
+              chrome.runtime.sendMessage({ type: 'FALLBACK_SPEECH_ENDED' }).catch(() => {});
+            };
+            utterance.onerror = () => {
+              chrome.runtime.sendMessage({ type: 'FALLBACK_SPEECH_ENDED' }).catch(() => {});
+            };
+            window.speechSynthesis.speak(utterance);
+          } else {
+            chrome.runtime.sendMessage({ type: 'FALLBACK_SPEECH_ENDED' }).catch(() => {});
+          }
         }
       };
 

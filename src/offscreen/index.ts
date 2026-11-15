@@ -1,5 +1,5 @@
 import { UserSettings, TranscriptItem } from '../types';
-import { translateTextWithGemini, synthesizeSpeechGoogleCloud, synthesizeWithWebSpeech } from '../services/google-gemini-live';
+import { translateAudioWithGemini, synthesizeSpeechGoogleCloud } from '../services/google-gemini-live';
 
 let audioCtx: AudioContext | null = null;
 let mediaStream: MediaStream | null = null;
@@ -8,26 +8,35 @@ let analyserNode: AnalyserNode | null = null;
 let currentSettings: UserSettings | null = null;
 let isDubbingActive = false;
 let isAudioDucking = false;
-let recognition: any = null;
 let animationFrameId: number | null = null;
+let mediaRecorder: MediaRecorder | null = null;
+let activeTabId: number | null = null;
 
-// Speech queue to prevent overlapping speech synthesis
+// Audio processing & VAD variables
+let currentAudioLevel = 0;
+let peakLevelInCurrentChunk = 0;
+let isProcessingChunk = false;
+
+// Queue of translated sentences awaiting voice synthesis
 const speechQueue: Array<{
   originalText: string;
   translatedText: string;
-  sourceLang: string;
   targetLang: string;
 }> = [];
-let isPlayingSpeech = false;
+let isPlayingVoice = false;
 
-// Listen for messages from background script
+// Listen for messages from background script or content script
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'OFFSCREEN_START_CAPTURE') {
+    activeTabId = message.tabId || null;
     startCapture(message.streamId, message.settings);
   } else if (message.type === 'OFFSCREEN_STOP_CAPTURE') {
     stopCapture();
   } else if (message.type === 'SETTINGS_UPDATED') {
     currentSettings = message.settings;
+  } else if (message.type === 'FALLBACK_SPEECH_ENDED') {
+    // Content script finished playing local fallback speech
+    onSpeechPlaybackDone();
   }
 });
 
@@ -49,31 +58,35 @@ async function startCapture(streamId: string, settings: UserSettings) {
 
     // 2. Setup Web Audio Graph
     audioCtx = new AudioContext();
+    if (audioCtx.state === 'suspended') {
+      await audioCtx.resume();
+    }
+
     const sourceNode = audioCtx.createMediaStreamSource(mediaStream);
 
-    // Tab Gain Node (for Ducking)
+    // Tab Gain Node (controls Volume Ducking)
     tabGainNode = audioCtx.createGain();
     tabGainNode.gain.setValueAtTime(1.0, audioCtx.currentTime);
 
-    // Analyser Node (for dynamic audio wave HUD)
+    // Analyser Node (for dynamic audio wave HUD & Voice Activity Detection)
     analyserNode = audioCtx.createAnalyser();
     analyserNode.fftSize = 64;
 
-    // Connect: Stream -> TabGain -> Speakers (so user hears original sound)
+    // Connect: Stream -> TabGain -> Output (so the user continues hearing original sound)
     sourceNode.connect(tabGainNode);
     tabGainNode.connect(audioCtx.destination);
 
     // Connect: Stream -> Analyser (for live meter)
     sourceNode.connect(analyserNode);
 
-    // Start Audio Level Metering Loop
+    // Start Audio Level Metering Loop & VAD
     startAudioMeter();
 
-    // 3. Initialize Real-Time Speech Recognition
-    startSpeechRecognition();
+    // 3. Initialize Audio Stream Chunk Recorder
+    startStreamRecorder();
 
   } catch (err: any) {
-    console.error('Error starting offscreen audio capture:', err);
+    console.error('Error starting tab audio capture:', err);
     chrome.runtime.sendMessage({
       type: 'STATE_CHANGED',
       state: {
@@ -90,7 +103,6 @@ async function startCapture(streamId: string, settings: UserSettings) {
 function startAudioMeter() {
   if (!analyserNode) return;
   const dataArray = new Uint8Array(analyserNode.frequencyBinCount);
-
   let lastSentTime = 0;
 
   const checkLevel = (time: number) => {
@@ -102,14 +114,19 @@ function startAudioMeter() {
       sum += dataArray[i];
     }
     const avg = sum / dataArray.length;
-    const normalizedLevel = Math.min(100, Math.round((avg / 255) * 100));
+    currentAudioLevel = Math.min(100, Math.round((avg / 255) * 100));
 
-    // Send audio level to UI at ~15fps to avoid message spam
+    // Track peak volume in current slice to determine if speech/sound occurred
+    if (currentAudioLevel > peakLevelInCurrentChunk) {
+      peakLevelInCurrentChunk = currentAudioLevel;
+    }
+
+    // Broadcast audio level to UI at ~15fps
     if (time - lastSentTime > 66) {
       lastSentTime = time;
       chrome.runtime.sendMessage({
         type: 'AUDIO_LEVEL',
-        level: normalizedLevel,
+        level: currentAudioLevel,
         isDucking: isAudioDucking,
       }).catch(() => {});
     }
@@ -120,123 +137,155 @@ function startAudioMeter() {
   animationFrameId = requestAnimationFrame(checkLevel);
 }
 
-function startSpeechRecognition() {
-  // Use WebKit Speech Recognition
-  const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    console.warn('SpeechRecognition API not available in this context');
-    return;
-  }
+function startStreamRecorder() {
+  if (!mediaStream) return;
 
-  recognition = new SpeechRecognition();
-  recognition.continuous = true;
-  recognition.interimResults = false;
-  recognition.maxAlternatives = 1;
-  recognition.lang = currentSettings?.sourceLanguage === 'auto' ? 'en-US' : currentSettings?.sourceLanguage || 'en-US';
+  const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus'
+    : 'audio/webm';
 
-  recognition.onresult = async (event: any) => {
-    const results = event.results;
-    const lastResult = results[results.length - 1];
-
-    if (lastResult.isFinal) {
-      const transcript = lastResult[0].transcript.trim();
-      if (transcript.length > 2) {
-        processSpokenSegment(transcript);
-      }
-    }
-  };
-
-  recognition.onerror = (event: any) => {
-    console.warn('Speech recognition event:', event.error);
-    // Restart recognition if it timed out or paused
-    if (isDubbingActive && event.error !== 'aborted') {
-      try {
-        recognition.stop();
-      } catch (_) {}
-      setTimeout(() => {
-        if (isDubbingActive) {
-          try { recognition.start(); } catch (_) {}
-        }
-      }, 500);
-    }
-  };
-
-  recognition.onend = () => {
-    if (isDubbingActive) {
-      try { recognition.start(); } catch (_) {}
-    }
-  };
+  let currentChunks: Blob[] = [];
 
   try {
-    recognition.start();
+    mediaRecorder = new MediaRecorder(mediaStream, { mimeType });
+
+    mediaRecorder.ondataavailable = async (e) => {
+      if (e.data && e.data.size > 0) {
+        currentChunks.push(e.data);
+      }
+    };
+
+    // Slice audio every 2.8 seconds for continuous streaming translation
+    const CHUNK_INTERVAL_MS = 2800;
+
+    const sliceTimer = setInterval(() => {
+      if (!isDubbingActive || !mediaRecorder) {
+        clearInterval(sliceTimer);
+        return;
+      }
+
+      if (mediaRecorder.state === 'recording') {
+        mediaRecorder.requestData();
+
+        const peak = peakLevelInCurrentChunk;
+        peakLevelInCurrentChunk = 0; // Reset peak tracker for next slice
+
+        // Check if there was actual audible sound in this segment (above silence threshold of 4%)
+        if (peak > 4 && currentChunks.length > 0 && !isProcessingChunk) {
+          const combinedBlob = new Blob(currentChunks, { type: mimeType });
+          currentChunks = [];
+          handleAudioChunk(combinedBlob, mimeType);
+        } else {
+          // Keep chunk buffer compact
+          if (currentChunks.length > 3) {
+            currentChunks = currentChunks.slice(-2);
+          }
+        }
+      }
+    }, CHUNK_INTERVAL_MS);
+
+    mediaRecorder.start(500); // deliver data in 500ms intervals
+
   } catch (err) {
-    console.warn('Failed to start recognition immediately:', err);
+    console.error('Failed to start MediaRecorder:', err);
   }
 }
 
-async function processSpokenSegment(text: string) {
-  if (!currentSettings || !currentSettings.googleApiKey) return;
+async function handleAudioChunk(blob: Blob, mimeType: string) {
+  if (!currentSettings || !currentSettings.googleApiKey || isProcessingChunk) return;
+
+  isProcessingChunk = true;
 
   try {
-    const targetLang = currentSettings.targetLanguage;
-    const apiKey = currentSettings.googleApiKey;
-    const model = currentSettings.geminiModel || 'gemini-1.5-flash';
-
-    // 1. Fast Neural Translation via Gemini Flash
-    const translation = await translateTextWithGemini(text, targetLang, apiKey, model);
-
-    const transcriptItem: TranscriptItem = {
-      id: Math.random().toString(36).substring(2, 9),
-      timestamp: Date.now(),
-      originalText: text,
-      translatedText: translation.translatedText,
-      sourceLang: currentSettings.sourceLanguage,
-      targetLang: currentSettings.targetLanguage,
-    };
-
-    // Broadcast new transcript for subtitles and transcript list
-    chrome.runtime.sendMessage({
-      type: 'NEW_TRANSCRIPT',
-      item: transcriptItem,
-    }).catch(() => {});
-
-    // 2. Queue for Dubbed Speech Synthesis
-    speechQueue.push({
-      originalText: text,
-      translatedText: translation.translatedText,
-      sourceLang: currentSettings.sourceLanguage,
-      targetLang: currentSettings.targetLanguage,
+    // Convert Blob to Base64
+    const base64Audio = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result as string;
+        const base64 = result.substring(result.indexOf(',') + 1);
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
     });
 
-    processSpeechQueue();
+    // 1. Direct Multimodal Audio Translation with Google Gemini API
+    const translation = await translateAudioWithGemini(
+      base64Audio,
+      mimeType,
+      currentSettings.targetLanguage,
+      currentSettings.googleApiKey,
+      currentSettings.geminiModel || 'gemini-2.0-flash'
+    );
 
-  } catch (err) {
-    console.error('Failed to translate and dub segment:', err);
+    if (translation.speechDetected && translation.translatedText.trim().length > 0) {
+      const transcriptItem: TranscriptItem = {
+        id: Math.random().toString(36).substring(2, 9),
+        timestamp: Date.now(),
+        originalText: translation.originalText || '(Audio speech)',
+        translatedText: translation.translatedText,
+        sourceLang: currentSettings.sourceLanguage,
+        targetLang: currentSettings.targetLanguage,
+      };
+
+      // Broadcast new transcript for live subtitles & transcript history
+      chrome.runtime.sendMessage({
+        type: 'NEW_TRANSCRIPT',
+        item: transcriptItem,
+      }).catch(() => {});
+
+      // Queue for dubbed speech synthesis
+      speechQueue.push({
+        originalText: translation.originalText,
+        translatedText: translation.translatedText,
+        targetLang: currentSettings.targetLanguage,
+      });
+
+      processSpeechQueue();
+    }
+
+  } catch (err: any) {
+    console.error('Failed to translate audio chunk:', err);
+    // If invalid key or quota error, notify UI
+    if (err.message && (err.message.includes('API key') || err.message.includes('RESOURCE_EXHAUSTED') || err.message.includes('403'))) {
+      chrome.runtime.sendMessage({
+        type: 'STATE_CHANGED',
+        state: {
+          status: 'error',
+          errorMessage: err.message,
+          audioLevel: 0,
+          isDucking: false,
+          stats: { latencyMs: 0, sentencesDubbed: 0, bytesProcessed: 0 },
+        },
+      });
+    }
+  } finally {
+    isProcessingChunk = false;
   }
 }
 
 async function processSpeechQueue() {
-  if (isPlayingSpeech || speechQueue.length === 0 || !audioCtx) return;
+  if (isPlayingVoice || speechQueue.length === 0 || !audioCtx) return;
 
-  isPlayingSpeech = true;
+  isPlayingVoice = true;
   const currentItem = speechQueue.shift()!;
   const settings = currentSettings!;
 
   try {
-    // Apply Audio Ducking: Drop original video audio smoothly
+    // Apply Audio Ducking: Drop original video sound
     setAudioDucking(true, settings.duckingLevel);
 
-    // Try Google Cloud TTS first with User's BYOK API Key
+    // Try Google Cloud TTS first (if key supports Cloud TTS)
+    let playedViaCloudTTS = false;
     try {
       const audioBuffer = await synthesizeSpeechGoogleCloud(
         currentItem.translatedText,
-        settings.targetLanguage,
+        settings.targetLanguage as any,
         settings.googleApiKey,
         settings.voiceGender,
         settings.voiceSpeed
       );
 
-      // Decode audio and play via Web Audio API
       const decodedAudio = await audioCtx.decodeAudioData(audioBuffer);
       const dubSource = audioCtx.createBufferSource();
       dubSource.buffer = decodedAudio;
@@ -247,27 +296,44 @@ async function processSpeechQueue() {
         dubSource.start();
       });
 
+      playedViaCloudTTS = true;
+      onSpeechPlaybackDone();
+
     } catch (ttsErr) {
-      console.warn('Google Cloud TTS unavailable or failed, falling back to Web Speech API:', ttsErr);
-      // Fallback: Local Web Speech Synthesis
-      await synthesizeWithWebSpeech(
-        currentItem.translatedText,
-        settings.targetLanguage,
-        settings.voiceSpeed
-      );
+      // Cloud TTS is not enabled on standard AI Studio free keys;
+      // Delegate to browser's SpeechSynthesis engine in the active tab!
+      playedViaCloudTTS = false;
+    }
+
+    if (!playedViaCloudTTS && activeTabId) {
+      // Request active tab to speak the translated text
+      chrome.tabs.sendMessage(activeTabId, {
+        type: 'PLAY_SPEECH_FALLBACK',
+        text: currentItem.translatedText,
+        lang: settings.targetLanguage,
+        speed: settings.voiceSpeed,
+      }).catch(() => {
+        // Fallback safety timeout if tab doesn't respond
+        setTimeout(() => onSpeechPlaybackDone(), 2500);
+      });
+    } else if (!playedViaCloudTTS) {
+      setTimeout(() => onSpeechPlaybackDone(), 2000);
     }
 
   } catch (err) {
-    console.error('Error during dubbed voice playback:', err);
-  } finally {
-    // Release Audio Ducking smoothly
-    setAudioDucking(false, 1.0);
-    isPlayingSpeech = false;
+    console.error('Error during voice synthesis:', err);
+    onSpeechPlaybackDone();
+  }
+}
 
-    // Continue queue
-    if (speechQueue.length > 0) {
-      setTimeout(() => processSpeechQueue(), 150);
-    }
+function onSpeechPlaybackDone() {
+  // Release Audio Ducking smoothly
+  setAudioDucking(false, 1.0);
+  isPlayingVoice = false;
+
+  // Process next item in speech queue
+  if (speechQueue.length > 0) {
+    setTimeout(() => processSpeechQueue(), 100);
   }
 }
 
@@ -276,14 +342,15 @@ function setAudioDucking(duck: boolean, targetLevel: number) {
   isAudioDucking = duck;
 
   const now = audioCtx.currentTime;
-  const timeConstant = duck ? 0.08 : 0.25; // Duck fast (80ms), release gently (250ms)
+  const timeConstant = duck ? 0.08 : 0.28; // Duck quickly (80ms), restore gently (280ms)
   tabGainNode.gain.setTargetAtTime(targetLevel, now, timeConstant);
 }
 
 function stopCapture() {
   isDubbingActive = false;
   isAudioDucking = false;
-  isPlayingSpeech = false;
+  isPlayingVoice = false;
+  isProcessingChunk = false;
   speechQueue.length = 0;
 
   if (animationFrameId) {
@@ -291,12 +358,11 @@ function stopCapture() {
     animationFrameId = null;
   }
 
-  if (recognition) {
+  if (mediaRecorder) {
     try {
-      recognition.onend = null;
-      recognition.stop();
+      if (mediaRecorder.state !== 'inactive') mediaRecorder.stop();
     } catch (_) {}
-    recognition = null;
+    mediaRecorder = null;
   }
 
   if (mediaStream) {
@@ -312,4 +378,3 @@ function stopCapture() {
   tabGainNode = null;
   analyserNode = null;
 }
-

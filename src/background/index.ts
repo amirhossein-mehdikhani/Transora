@@ -227,6 +227,12 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
       return { success: true };
     }
 
+    case 'FALLBACK_SPEECH_ENDED': {
+      // Forward from content script to offscreen document
+      chrome.runtime.sendMessage({ type: 'FALLBACK_SPEECH_ENDED' }).catch(() => {});
+      return { success: true };
+    }
+
     default:
       return null;
   }

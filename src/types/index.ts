@@ -177,5 +177,6 @@ export type ExtensionMessage =
   | { type: 'SETTINGS_UPDATED'; settings: UserSettings }
   | { type: 'TOGGLE_SUBTITLES'; enabled: boolean }
   | { type: 'OPEN_SIDEPANEL' }
+  | { type: 'FALLBACK_SPEECH_ENDED' }
   | { type: 'TEST_API_KEY'; apiKey: string }
   | { type: 'TEST_API_KEY_RESULT'; success: boolean; message: string };
