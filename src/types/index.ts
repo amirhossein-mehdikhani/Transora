@@ -38,6 +38,78 @@ export type VoiceGender = 'FEMALE' | 'MALE' | 'NEUTRAL';
 export type AppMode = 'video' | 'meeting';
 export type DubbingEngine = 'gemini_live' | 'google_cloud_pipeline';
 
+export interface GeminiModelOption {
+  id: string;
+  name: string;
+  tier: 'free' | 'paid';
+  badge: string;
+  description: string;
+  latency: 'Ultra-Fast' | 'Fast' | 'Standard';
+  recommended?: boolean;
+}
+
+export const AVAILABLE_GEMINI_MODELS: GeminiModelOption[] = [
+  // Free Tier Models
+  {
+    id: 'gemini-2.0-flash',
+    name: 'Gemini 2.0 Flash',
+    tier: 'free',
+    badge: 'FREE / RECOMMENDED',
+    description: 'Sub-second real-time streaming, lowest latency, ideal for live video dubbing.',
+    latency: 'Ultra-Fast',
+    recommended: true,
+  },
+  {
+    id: 'gemini-2.0-flash-lite',
+    name: 'Gemini 2.0 Flash-Lite',
+    tier: 'free',
+    badge: 'FREE / ULTRA-LIGHT',
+    description: 'High-frequency lightweight model optimized for instant response and zero lag.',
+    latency: 'Ultra-Fast',
+  },
+  {
+    id: 'gemini-3.8-flash',
+    name: 'Gemini 3.8 Flash',
+    tier: 'free',
+    badge: 'FREE / NEXT-GEN',
+    description: 'Next-gen Flash architecture with advanced conversational awareness.',
+    latency: 'Fast',
+  },
+  {
+    id: 'gemini-1.5-flash',
+    name: 'Gemini 1.5 Flash',
+    tier: 'free',
+    badge: 'FREE / STABLE',
+    description: 'Reliable workhorse model with 1M token context on free tier.',
+    latency: 'Fast',
+  },
+  {
+    id: 'gemini-1.5-flash-8b',
+    name: 'Gemini 1.5 Flash-8B',
+    tier: 'free',
+    badge: 'FREE / 8B COMPACT',
+    description: 'Smaller footprint, fast turn-taking for live stream dialogue.',
+    latency: 'Ultra-Fast',
+  },
+  // Paid / Pro Tier Models
+  {
+    id: 'gemini-1.5-pro',
+    name: 'Gemini 1.5 Pro',
+    tier: 'paid',
+    badge: 'PAID / PRO TIER',
+    description: 'Cinematic quality, nuanced idiom adaptation, and deep emotional matching.',
+    latency: 'Standard',
+  },
+  {
+    id: 'gemini-2.5-pro',
+    name: 'Gemini 2.5 Pro',
+    tier: 'paid',
+    badge: 'PAID / REASONING',
+    description: 'Complex dialogue interpretation, technical seminars, and multi-speaker debate.',
+    latency: 'Standard',
+  },
+];
+
 export interface UserSettings {
   googleApiKey: string;
   geminiModel: string;
@@ -55,7 +127,7 @@ export interface UserSettings {
 
 export const DEFAULT_SETTINGS: UserSettings = {
   googleApiKey: '',
-  geminiModel: 'gemini-1.5-flash',
+  geminiModel: 'gemini-2.0-flash',
   sourceLanguage: 'auto',
   targetLanguage: 'fa',
   voiceGender: 'FEMALE',

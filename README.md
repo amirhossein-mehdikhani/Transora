@@ -48,6 +48,28 @@ flowchart LR
 
 ---
 
+## 🧠 Supported Google Gemini Models
+
+Transora supports the entire modern Google Gemini API catalog with live auto-detection from your Google AI Studio project:
+
+### 🟢 Free Tier Eligible Models ($0 Cost)
+| Model Identifier | Latency | Context | Best Use Case |
+| :--- | :--- | :--- | :--- |
+| **`gemini-2.0-flash`** *(Recommended)* | ⚡ Ultra-Fast (~300ms) | 1M Tokens | Real-time live dubbing & streaming dialogue |
+| **`gemini-2.0-flash-lite`** | ⚡ Ultra-Fast (~220ms) | 1M Tokens | High-frequency continuous speech & gaming streams |
+| **`gemini-3.8-flash`** | 🚀 Fast (~450ms) | 1M Tokens | Next-gen reasoning & natural conversational flow |
+| **`gemini-1.5-flash`** | 🚀 Fast (~500ms) | 1M Tokens | Stable workhorse for general video translation |
+| **`gemini-1.5-flash-8b`** | ⚡ Ultra-Fast (~280ms) | 1M Tokens | Lightweight rapid turn-taking |
+
+### 💎 Paid / Pro Tier Models (High Reasoning)
+| Model Identifier | Latency | Context | Best Use Case |
+| :--- | :--- | :--- | :--- |
+| **`gemini-1.5-pro`** | 🧠 Standard (~850ms) | 2M Tokens | Cinematic nuance, complex idioms & literary accuracy |
+| **`gemini-2.5-pro`** | 🧠 Standard (~900ms) | 2M Tokens | Technical lectures, multi-speaker debate, specialized terminology |
+| **Custom Model ID** | Custom | Custom | Any fine-tuned or experimental Google AI Studio endpoint |
+
+---
+
 ## 🛠️ Tech Stack
 
 - **Framework:** React 18 + TypeScript + Vite

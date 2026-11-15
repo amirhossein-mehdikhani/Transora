@@ -11,7 +11,14 @@ import {
   CheckCircle2, 
   AlertTriangle 
 } from 'lucide-react';
-import { DubbingState, UserSettings, DEFAULT_SETTINGS, SUPPORTED_LANGUAGES, SupportedLanguage } from '../types';
+import { 
+  DubbingState, 
+  UserSettings, 
+  DEFAULT_SETTINGS, 
+  SUPPORTED_LANGUAGES, 
+  SupportedLanguage,
+  AVAILABLE_GEMINI_MODELS
+} from '../types';
 
 export default function PopupApp() {
   const [state, setState] = useState<DubbingState>({
@@ -239,11 +246,16 @@ export default function PopupApp() {
         </button>
       </div>
 
-      {/* Target Language Selection */}
+      {/* Target Language Selection & Active Model */}
       <div className="space-y-1.5">
-        <label className="text-[11px] font-medium text-slate-400 flex items-center gap-1.5">
-          <Globe2 className="w-3.5 h-3.5 text-cyan-400" /> Target Dubbing Language
-        </label>
+        <div className="flex items-center justify-between text-[11px] text-slate-400">
+          <span className="flex items-center gap-1.5 font-medium">
+            <Globe2 className="w-3.5 h-3.5 text-cyan-400" /> Target Language
+          </span>
+          <span className="text-[10px] text-slate-400 font-mono">
+            {settings.geminiModel}
+          </span>
+        </div>
         <div className="relative">
           <select
             value={settings.targetLanguage}

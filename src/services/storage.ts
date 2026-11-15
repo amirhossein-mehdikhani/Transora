@@ -106,3 +106,29 @@ export async function testGoogleApiKey(apiKey: string): Promise<{ success: boole
   }
 }
 
+/**
+ * Dynamically queries Google AI Studio API for all available models associated with the user's API key
+ */
+export async function fetchLiveGeminiModels(apiKey: string): Promise<Array<{ id: string; name: string }>> {
+  if (!apiKey || apiKey.trim().length === 0) return [];
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey.trim()}`;
+    const response = await fetch(url, { method: 'GET' });
+    if (!response.ok) return [];
+
+    const data = await response.json();
+    if (!data.models || !Array.isArray(data.models)) return [];
+
+    return data.models
+      .filter((m: any) => m.supportedGenerationMethods?.includes('generateContent'))
+      .map((m: any) => ({
+        id: m.name.replace(/^models\//, ''),
+        name: m.displayName || m.name.replace(/^models\//, ''),
+      }));
+  } catch (e) {
+    console.error('Failed to fetch live Gemini models:', e);
+    return [];
+  }
+}
+
