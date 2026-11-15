@@ -32,8 +32,16 @@ export default function PopupApp() {
   const [quickKeyInput, setQuickKeyInput] = useState('');
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [keySaveSuccess, setKeySaveSuccess] = useState(false);
+  const [targetTab, setTargetTab] = useState<chrome.tabs.Tab | null>(null);
 
   useEffect(() => {
+    // Pre-fetch active video tab immediately on popup mount so click is 100% synchronous
+    chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+      if (tabs[0]?.id) {
+        setTargetTab(tabs[0]);
+      }
+    });
+
     // Initial fetch
     chrome.runtime.sendMessage({ type: 'GET_STATE' }, (res) => {
       if (res?.state) setState(res.state);
@@ -74,38 +82,43 @@ export default function PopupApp() {
 
     if (isActive) {
       chrome.runtime.sendMessage({ type: 'STOP_DUBBING' });
-    } else {
-      chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
-        const currentTab = tabs[0];
-        if (!currentTab || !currentTab.id) {
-          console.error('No active tab found');
-          return;
-        }
-
-        if (currentTab.url?.startsWith('chrome://') || currentTab.url?.startsWith('chrome-extension://')) {
-          alert('Cannot dub internal Chrome system pages (chrome://). Please navigate to YouTube, Meet, or any video webpage.');
-          return;
-        }
-
-        // Invoke tabCapture synchronously within the popup click gesture
-        chrome.tabCapture.getMediaStreamId({ targetTabId: currentTab.id }, (streamId) => {
-          if (chrome.runtime.lastError || !streamId) {
-            console.warn('tabCapture error:', chrome.runtime.lastError?.message);
-            chrome.runtime.sendMessage({
-              type: 'START_DUBBING',
-              tabId: currentTab.id,
-            });
-            return;
-          }
-
-          chrome.runtime.sendMessage({
-            type: 'START_DUBBING_WITH_STREAM',
-            streamId,
-            tabId: currentTab.id,
-          });
-        });
-      });
+      return;
     }
+
+    const currentTab = targetTab;
+    if (!currentTab || !currentTab.id) {
+      console.warn('Target tab not ready yet, retrying query...');
+      chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+        if (tabs[0]?.id) {
+          setTargetTab(tabs[0]);
+          chrome.runtime.sendMessage({ type: 'START_DUBBING', tabId: tabs[0].id });
+        }
+      });
+      return;
+    }
+
+    if (currentTab.url?.startsWith('chrome://') || currentTab.url?.startsWith('chrome-extension://')) {
+      alert('Cannot dub internal Chrome system pages (chrome://). Please navigate to YouTube, Meet, or any video webpage.');
+      return;
+    }
+
+    // Call tabCapture.getMediaStreamId IMMEDIATELY and SYNCHRONOUSLY inside the click event
+    chrome.tabCapture.getMediaStreamId({ targetTabId: currentTab.id }, (streamId) => {
+      if (chrome.runtime.lastError || !streamId) {
+        console.warn('tabCapture notice:', chrome.runtime.lastError?.message);
+        chrome.runtime.sendMessage({
+          type: 'START_DUBBING',
+          tabId: currentTab.id,
+        });
+        return;
+      }
+
+      chrome.runtime.sendMessage({
+        type: 'START_DUBBING_WITH_STREAM',
+        streamId,
+        tabId: currentTab.id,
+      });
+    });
   };
 
   const handleLanguageChange = (e: React.ChangeEvent<HTMLSelectElement>) => {

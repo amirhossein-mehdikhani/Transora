@@ -2,8 +2,34 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { DynamicIslandHUD } from './components/DynamicIslandHUD';
 import { SubtitleOverlay } from './components/SubtitleOverlay';
-import { DubbingState, UserSettings, DEFAULT_SETTINGS, SupportedLanguage } from '../types';
+import { DubbingState, UserSettings, DEFAULT_SETTINGS, SupportedLanguage, TranscriptItem } from '../types';
+import { translateAudioWithGemini } from '../services/google-gemini-live';
 import contentStyles from './styles/content.css?inline';
+
+let localRecorder: MediaRecorder | null = null;
+let localSliceTimer: any = null;
+let activeVideoEl: HTMLVideoElement | null = null;
+let originalVideoVolume = 1.0;
+
+function stopLocalVideoDubbing() {
+  if (localSliceTimer) {
+    clearInterval(localSliceTimer);
+    localSliceTimer = null;
+  }
+  if (localRecorder) {
+    try {
+      if (localRecorder.state !== 'inactive') localRecorder.stop();
+    } catch (_) {}
+    localRecorder = null;
+  }
+  if (activeVideoEl) {
+    activeVideoEl.volume = originalVideoVolume;
+    activeVideoEl = null;
+  }
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+  }
+}
 
 function initTransoraContent() {
   const existingHost = document.getElementById('transora-host-container');
@@ -92,10 +118,119 @@ function initTransoraContent() {
 
     const handleToggleDubbing = () => {
       if (state.status === 'dubbing' || state.status === 'listening') {
+        stopLocalVideoDubbing();
         chrome.runtime.sendMessage({ type: 'STOP_DUBBING' });
-      } else {
-        chrome.runtime.sendMessage({ type: 'START_DUBBING' });
+        setState((prev) => ({ ...prev, status: 'idle', isDucking: false, audioLevel: 0 }));
+        return;
       }
+
+      // Check if page has an active HTML5 video element (YouTube, Twitch, Coursera, etc.)
+      const video = document.querySelector('video') as HTMLVideoElement | null;
+      const canCaptureVideo = Boolean(video && ((video as any).captureStream || (video as any).mozCaptureStream));
+
+      if (canCaptureVideo && video) {
+        try {
+          const stream = (video as any).captureStream 
+            ? (video as any).captureStream() 
+            : (video as any).mozCaptureStream();
+
+          if (stream && stream.getAudioTracks().length > 0) {
+            // Start in-page video dubbing
+            activeVideoEl = video;
+            originalVideoVolume = video.volume;
+
+            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+              ? 'audio/webm;codecs=opus'
+              : 'audio/webm';
+
+            let currentChunks: Blob[] = [];
+            localRecorder = new MediaRecorder(stream, { mimeType });
+
+            localRecorder.ondataavailable = (e) => {
+              if (e.data && e.data.size > 0) currentChunks.push(e.data);
+            };
+
+            localRecorder.start(500);
+
+            localSliceTimer = setInterval(() => {
+              if (!localRecorder || localRecorder.state !== 'recording') return;
+              localRecorder.requestData();
+
+              if (currentChunks.length > 0 && !video.paused && !video.muted && video.volume > 0.05) {
+                const blob = new Blob(currentChunks, { type: mimeType });
+                currentChunks = [];
+
+                const reader = new FileReader();
+                reader.onloadend = async () => {
+                  const base64Audio = (reader.result as string).split(',')[1];
+                  if (!base64Audio || !settings.googleApiKey) return;
+
+                  try {
+                    const translation = await translateAudioWithGemini(
+                      base64Audio,
+                      mimeType,
+                      settings.targetLanguage,
+                      settings.googleApiKey,
+                      settings.geminiModel || 'gemini-2.0-flash'
+                    );
+
+                    if (translation.speechDetected && translation.translatedText.trim()) {
+                      const item: TranscriptItem = {
+                        id: Math.random().toString(36).substring(2, 9),
+                        timestamp: Date.now(),
+                        originalText: translation.originalText || '(Video speech)',
+                        translatedText: translation.translatedText,
+                        sourceLang: settings.sourceLanguage,
+                        targetLang: settings.targetLanguage,
+                      };
+
+                      setState((prev) => ({
+                        ...prev,
+                        currentOriginalText: item.originalText,
+                        currentTranslatedText: item.translatedText,
+                        isDucking: true,
+                        audioLevel: 75,
+                      }));
+
+                      chrome.runtime.sendMessage({ type: 'NEW_TRANSCRIPT', item }).catch(() => {});
+
+                      // Duck video volume directly
+                      video.volume = Math.max(0.04, originalVideoVolume * settings.duckingLevel);
+
+                      if ('speechSynthesis' in window) {
+                        window.speechSynthesis.cancel();
+                        const utterance = new SpeechSynthesisUtterance(translation.translatedText);
+                        utterance.lang = settings.targetLanguage === 'fa' ? 'fa-IR' : settings.targetLanguage;
+                        utterance.rate = settings.voiceSpeed || 1.0;
+                        utterance.onend = () => {
+                          video.volume = originalVideoVolume;
+                          setState((prev) => ({ ...prev, isDucking: false, audioLevel: 0 }));
+                        };
+                        utterance.onerror = () => {
+                          video.volume = originalVideoVolume;
+                          setState((prev) => ({ ...prev, isDucking: false, audioLevel: 0 }));
+                        };
+                        window.speechSynthesis.speak(utterance);
+                      }
+                    }
+                  } catch (e: any) {
+                    console.warn('In-page translation:', e.message);
+                  }
+                };
+                reader.readAsDataURL(blob);
+              }
+            }, 2800);
+
+            setState((prev) => ({ ...prev, status: 'dubbing', errorMessage: undefined }));
+            return;
+          }
+        } catch (err) {
+          console.warn('Direct video capture fallback to tabCapture:', err);
+        }
+      }
+
+      // Fallback: Use standard background tabCapture
+      chrome.runtime.sendMessage({ type: 'START_DUBBING' });
     };
 
     const handleLanguageChange = (lang: SupportedLanguage) => {
