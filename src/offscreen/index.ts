@@ -13,7 +13,7 @@ let analyserNode: AnalyserNode | null = null;
 let currentSettings: UserSettings | null = null;
 let isDubbingActive = false;
 let isAudioDucking = false;
-let animationFrameId: number | null = null;
+let audioMeterInterval: any = null;
 let mediaRecorder: MediaRecorder | null = null;
 let activeTabId: number | null = null;
 
@@ -31,17 +31,25 @@ const speechQueue: Array<{
 let isPlayingVoice = false;
 
 // Listen for messages from background script or content script
-chrome.runtime.onMessage.addListener((message) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'OFFSCREEN_START_CAPTURE') {
     activeTabId = message.tabId || null;
     startCapture(message.streamId, message.settings);
+    sendResponse({ received: true });
+    return true;
   } else if (message.type === 'OFFSCREEN_STOP_CAPTURE') {
     stopCapture();
+    sendResponse({ received: true });
+    return true;
   } else if (message.type === 'SETTINGS_UPDATED') {
     currentSettings = message.settings;
+    sendResponse({ received: true });
+    return true;
   } else if (message.type === 'FALLBACK_SPEECH_ENDED') {
     // Content script finished playing local fallback speech
     onSpeechPlaybackDone();
+    sendResponse({ received: true });
+    return true;
   }
 });
 
@@ -108,10 +116,17 @@ async function startCapture(streamId: string, settings: UserSettings) {
 function startAudioMeter() {
   if (!analyserNode) return;
   const dataArray = new Uint8Array(analyserNode.frequencyBinCount);
-  let lastSentTime = 0;
 
-  const checkLevel = (time: number) => {
-    if (!isDubbingActive || !analyserNode) return;
+  if (audioMeterInterval) {
+    clearInterval(audioMeterInterval);
+  }
+
+  // Use setInterval because Chromium suspends requestAnimationFrame in offscreen/hidden contexts!
+  audioMeterInterval = setInterval(() => {
+    if (!isDubbingActive || !analyserNode) {
+      if (audioMeterInterval) clearInterval(audioMeterInterval);
+      return;
+    }
 
     analyserNode.getByteFrequencyData(dataArray);
     let sum = 0;
@@ -127,19 +142,12 @@ function startAudioMeter() {
     }
 
     // Broadcast audio level to UI at ~15fps
-    if (time - lastSentTime > 66) {
-      lastSentTime = time;
-      chrome.runtime.sendMessage({
-        type: 'AUDIO_LEVEL',
-        level: currentAudioLevel,
-        isDucking: isAudioDucking,
-      }).catch(() => {});
-    }
-
-    animationFrameId = requestAnimationFrame(checkLevel);
-  };
-
-  animationFrameId = requestAnimationFrame(checkLevel);
+    chrome.runtime.sendMessage({
+      type: 'AUDIO_LEVEL',
+      level: currentAudioLevel,
+      isDucking: isAudioDucking,
+    }).catch(() => {});
+  }, 66);
 }
 
 function startStreamRecorder() {
@@ -175,8 +183,8 @@ function startStreamRecorder() {
         const peak = peakLevelInCurrentChunk;
         peakLevelInCurrentChunk = 0; // Reset peak tracker for next slice
 
-        // Check if there was actual audible sound in this segment (above silence threshold of 4%)
-        if (peak > 4 && currentChunks.length > 0 && !isProcessingChunk) {
+        // Check if there was actual audible sound in this segment (above silence threshold of 2%)
+        if (peak > 2 && currentChunks.length > 0 && !isProcessingChunk) {
           const combinedBlob = new Blob(currentChunks, { type: mimeType });
           currentChunks = [];
           handleAudioChunk(combinedBlob, mimeType);
@@ -363,9 +371,9 @@ function stopCapture() {
   isProcessingChunk = false;
   speechQueue.length = 0;
 
-  if (animationFrameId) {
-    cancelAnimationFrame(animationFrameId);
-    animationFrameId = null;
+  if (audioMeterInterval) {
+    clearInterval(audioMeterInterval);
+    audioMeterInterval = null;
   }
 
   if (mediaRecorder) {

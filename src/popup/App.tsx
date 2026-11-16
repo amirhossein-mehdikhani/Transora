@@ -186,19 +186,31 @@ export default function PopupApp() {
 
       // Call tabCapture.getMediaStreamId synchronously within user gesture
       chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id }, (streamId) => {
-        if (chrome.runtime.lastError || !streamId) {
-          console.warn('tabCapture notice:', chrome.runtime.lastError?.message);
+        if (streamId) {
           chrome.runtime.sendMessage({
-            type: 'START_DUBBING',
+            type: 'START_DUBBING_WITH_STREAM',
+            streamId,
             tabId: tab.id,
           });
           return;
         }
 
-        chrome.runtime.sendMessage({
-          type: 'START_DUBBING_WITH_STREAM',
-          streamId,
-          tabId: tab.id,
+        // Secondary attempt with default options
+        chrome.tabCapture.getMediaStreamId({}, (fallbackId: string) => {
+          if (fallbackId) {
+            chrome.runtime.sendMessage({
+              type: 'START_DUBBING_WITH_STREAM',
+              streamId: fallbackId,
+              tabId: tab.id,
+            });
+            return;
+          }
+
+          console.warn('tabCapture notice:', chrome.runtime.lastError?.message);
+          chrome.runtime.sendMessage({
+            type: 'START_DUBBING',
+            tabId: tab.id,
+          });
         });
       });
     };

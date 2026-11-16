@@ -140,13 +140,25 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
         // 2. Ensure Offscreen Document is running
         await setupOffscreenDocument('src/offscreen/index.html');
 
-        // 3. Send streamId and settings to offscreen document
-        chrome.runtime.sendMessage({
-          type: 'OFFSCREEN_START_CAPTURE',
-          streamId,
-          settings: currentSettings,
-          tabId,
-        });
+        // 3. Deliver streamId to offscreen document with reliable delivery check
+        const deliverCaptureToOffscreen = (retries = 5) => {
+          chrome.runtime.sendMessage(
+            {
+              type: 'OFFSCREEN_START_CAPTURE',
+              streamId,
+              settings: currentSettings,
+              tabId,
+            },
+            (response) => {
+              if (chrome.runtime.lastError || !response?.received) {
+                if (retries > 0) {
+                  setTimeout(() => deliverCaptureToOffscreen(retries - 1), 120);
+                }
+              }
+            }
+          );
+        };
+        deliverCaptureToOffscreen();
 
         broadcastState({
           ...currentState,
@@ -191,13 +203,25 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
         // Ensure Offscreen Document is running
         await setupOffscreenDocument('src/offscreen/index.html');
 
-        // Send streamId directly to offscreen document
-        chrome.runtime.sendMessage({
-          type: 'OFFSCREEN_START_CAPTURE',
-          streamId: message.streamId,
-          settings: currentSettings,
-          tabId,
-        });
+        // Deliver streamId directly to offscreen document with reliable delivery check
+        const deliverCaptureStream = (retries = 5) => {
+          chrome.runtime.sendMessage(
+            {
+              type: 'OFFSCREEN_START_CAPTURE',
+              streamId: message.streamId,
+              settings: currentSettings,
+              tabId,
+            },
+            (response) => {
+              if (chrome.runtime.lastError || !response?.received) {
+                if (retries > 0) {
+                  setTimeout(() => deliverCaptureStream(retries - 1), 120);
+                }
+              }
+            }
+          );
+        };
+        deliverCaptureStream();
 
         broadcastState({
           ...currentState,
