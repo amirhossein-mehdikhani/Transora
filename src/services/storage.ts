@@ -14,7 +14,13 @@ export async function getStoredSettings(): Promise<UserSettings> {
 
     chrome.storage.local.get([STORAGE_KEYS.SETTINGS], (result) => {
       if (result[STORAGE_KEYS.SETTINGS]) {
-        resolve({ ...DEFAULT_SETTINGS, ...result[STORAGE_KEYS.SETTINGS] });
+        const loaded: UserSettings = { ...DEFAULT_SETTINGS, ...result[STORAGE_KEYS.SETTINGS] };
+        // Auto-migrate deprecated models to gemini-3.8-flash
+        if (!loaded.geminiModel || loaded.geminiModel.includes('gemini-2.0')) {
+          loaded.geminiModel = 'gemini-3.8-flash';
+          chrome.storage.local.set({ [STORAGE_KEYS.SETTINGS]: loaded });
+        }
+        resolve(loaded);
       } else {
         resolve(DEFAULT_SETTINGS);
       }

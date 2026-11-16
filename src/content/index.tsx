@@ -56,7 +56,7 @@ async function playDubbedAudio(
   apiKey: string,
   speed = 1.0,
   gender: 'FEMALE' | 'MALE' | 'NEUTRAL' = 'FEMALE',
-  model = 'gemini-2.0-flash',
+  model = 'gemini-3.8-flash',
   onStart?: () => void,
   onEnd?: () => void
 ) {
@@ -247,7 +247,7 @@ function initTransoraContent() {
             settings.googleApiKey,
             msg.speed || settings.voiceSpeed,
             settings.voiceGender,
-            settings.geminiModel || 'gemini-2.0-flash',
+            settings.geminiModel || 'gemini-3.8-flash',
             () => {
               setState((prev) => ({ ...prev, isDucking: true, audioLevel: 85 }));
             },
@@ -283,7 +283,7 @@ function initTransoraContent() {
           cleanSentence,
           settings.targetLanguage,
           settings.googleApiKey,
-          settings.geminiModel || 'gemini-2.0-flash'
+          settings.geminiModel || 'gemini-3.8-flash'
         );
 
         if (!result.translatedText || result.translatedText.trim().length === 0) return;
@@ -321,7 +321,7 @@ function initTransoraContent() {
           settings.googleApiKey,
           settings.voiceSpeed,
           settings.voiceGender,
-          settings.geminiModel || 'gemini-2.0-flash',
+          settings.geminiModel || 'gemini-3.8-flash',
           () => {
             setState((prev) => ({ ...prev, isDucking: true, audioLevel: 80 }));
           },
@@ -488,7 +488,7 @@ function initTransoraContent() {
                       mimeType,
                       settings.targetLanguage,
                       settings.googleApiKey,
-                      settings.geminiModel || 'gemini-2.0-flash'
+                      settings.geminiModel || 'gemini-3.8-flash'
                     );
 
                     if (translation.speechDetected && translation.translatedText.trim()) {
@@ -565,7 +565,7 @@ function initTransoraContent() {
           testPhrase,
           settings.targetLanguage,
           settings.googleApiKey,
-          settings.geminiModel || 'gemini-2.0-flash'
+          settings.geminiModel || 'gemini-3.8-flash'
         );
 
         setState((prev) => ({
@@ -580,7 +580,7 @@ function initTransoraContent() {
           settings.googleApiKey,
           settings.voiceSpeed,
           settings.voiceGender,
-          settings.geminiModel || 'gemini-2.0-flash',
+          settings.geminiModel || 'gemini-3.8-flash',
           () => setState((p) => ({ ...p, isDucking: true, audioLevel: 90 })),
           () => setState((p) => ({ ...p, isDucking: false, audioLevel: 0, status: 'idle' }))
         );

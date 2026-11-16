@@ -220,7 +220,7 @@ async function handleAudioChunk(blob: Blob, mimeType: string) {
       mimeType,
       currentSettings.targetLanguage,
       currentSettings.googleApiKey,
-      currentSettings.geminiModel || 'gemini-2.0-flash'
+      currentSettings.geminiModel || 'gemini-3.8-flash'
     );
 
     if (translation.speechDetected && translation.translatedText.trim().length > 0) {
@@ -280,7 +280,7 @@ async function processSpeechQueue() {
     // Apply Audio Ducking: Drop original video sound
     setAudioDucking(true, settings.duckingLevel);
 
-    // Tier 1: Try Gemini 2.0 Flash Native Audio (Free AI Studio Key!)
+    // Tier 1: Try Gemini Flash Native Audio (Free AI Studio Key!)
     let playedVoice = false;
     try {
       const pcmBuffer = await synthesizeSpeechGeminiAudio(
@@ -288,7 +288,7 @@ async function processSpeechQueue() {
         settings.targetLanguage as any,
         settings.googleApiKey,
         settings.voiceGender,
-        settings.geminiModel || 'gemini-2.0-flash'
+        settings.geminiModel || 'gemini-3.8-flash'
       );
       await playAudioBuffer(audioCtx, pcmBuffer);
       playedVoice = true;

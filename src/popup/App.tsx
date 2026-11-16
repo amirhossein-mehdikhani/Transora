@@ -53,13 +53,17 @@ export default function PopupApp() {
     setTestingAudio(true);
     setTestAudioStatus('Translating & synthesizing voice...');
 
+    const modelToUse = (settings.geminiModel || 'gemini-3.8-flash').includes('gemini-2.0')
+      ? 'gemini-3.8-flash'
+      : settings.geminiModel || 'gemini-3.8-flash';
+
     try {
       const phrase = 'Hello! Transora live dubbing audio is working.';
       const res = await translateTextWithGemini(
         phrase,
         settings.targetLanguage,
         settings.googleApiKey,
-        settings.geminiModel || 'gemini-2.0-flash'
+        modelToUse
       );
 
       setTestAudioStatus(res.translatedText);
@@ -75,7 +79,7 @@ export default function PopupApp() {
           settings.targetLanguage,
           settings.googleApiKey,
           settings.voiceGender,
-          settings.geminiModel || 'gemini-2.0-flash'
+          modelToUse
         );
         await playAudioBuffer(audioCtx, pcm);
         played = true;
@@ -216,6 +220,15 @@ export default function PopupApp() {
       settings: { targetLanguage: lang },
     });
     setSettings((prev) => ({ ...prev, targetLanguage: lang }));
+  };
+
+  const handleModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const model = e.target.value;
+    chrome.runtime.sendMessage({
+      type: 'UPDATE_SETTINGS',
+      settings: { geminiModel: model },
+    });
+    setSettings((prev) => ({ ...prev, geminiModel: model }));
   };
 
   const toggleSubtitles = () => {
@@ -394,14 +407,14 @@ export default function PopupApp() {
         </div>
       </div>
 
-      {/* Target Language Selection & Active Model */}
+      {/* Target Language Selection */}
       <div className="space-y-1.5">
         <div className="flex items-center justify-between text-[11px] text-slate-400">
           <span className="flex items-center gap-1.5 font-medium">
             <Globe2 className="w-3.5 h-3.5 text-cyan-400" /> Target Language
           </span>
-          <span className="text-[10px] text-slate-400 font-mono">
-            {settings.geminiModel}
+          <span className="text-[10px] text-cyan-400 font-mono">
+            {settings.targetLanguage.toUpperCase()}
           </span>
         </div>
         <div className="relative">
@@ -413,6 +426,31 @@ export default function PopupApp() {
             {SUPPORTED_LANGUAGES.map((lang) => (
               <option key={lang.code} value={lang.code} className="bg-slate-900 text-white">
                 {lang.flag} {lang.name} ({lang.nativeName})
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* AI Model Selection */}
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between text-[11px] text-slate-400">
+          <span className="flex items-center gap-1.5 font-medium">
+            <Sparkles className="w-3.5 h-3.5 text-indigo-400" /> AI Model
+          </span>
+          <span className="text-[10px] text-cyan-400 font-medium">
+            {AVAILABLE_GEMINI_MODELS.find((m) => m.id === settings.geminiModel)?.badge || 'FREE'}
+          </span>
+        </div>
+        <div className="relative">
+          <select
+            value={settings.geminiModel || 'gemini-3.8-flash'}
+            onChange={handleModelChange}
+            className="w-full appearance-none bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-400 cursor-pointer"
+          >
+            {AVAILABLE_GEMINI_MODELS.map((m) => (
+              <option key={m.id} value={m.id} className="bg-slate-900 text-white">
+                {m.name} ({m.badge})
               </option>
             ))}
           </select>

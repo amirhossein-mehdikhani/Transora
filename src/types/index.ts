@@ -51,28 +51,20 @@ export interface GeminiModelOption {
 export const AVAILABLE_GEMINI_MODELS: GeminiModelOption[] = [
   // Free Tier Models
   {
-    id: 'gemini-2.0-flash',
-    name: 'Gemini 2.0 Flash',
+    id: 'gemini-3.8-flash',
+    name: 'Gemini 3.8 Flash',
     tier: 'free',
     badge: 'FREE / RECOMMENDED',
-    description: 'Sub-second real-time streaming, lowest latency, ideal for live video dubbing.',
+    description: 'Latest Google next-gen Flash model with native sub-second live dubbing.',
     latency: 'Ultra-Fast',
     recommended: true,
   },
   {
-    id: 'gemini-2.0-flash-lite',
-    name: 'Gemini 2.0 Flash-Lite',
+    id: 'gemini-2.5-flash',
+    name: 'Gemini 2.5 Flash',
     tier: 'free',
-    badge: 'FREE / ULTRA-LIGHT',
-    description: 'High-frequency lightweight model optimized for instant response and zero lag.',
-    latency: 'Ultra-Fast',
-  },
-  {
-    id: 'gemini-3.8-flash',
-    name: 'Gemini 3.8 Flash',
-    tier: 'free',
-    badge: 'FREE / NEXT-GEN',
-    description: 'Next-gen Flash architecture with advanced conversational awareness.',
+    badge: 'FREE / FAST',
+    description: 'High-speed conversational translation with low latency.',
     latency: 'Fast',
   },
   {
@@ -80,7 +72,7 @@ export const AVAILABLE_GEMINI_MODELS: GeminiModelOption[] = [
     name: 'Gemini 1.5 Flash',
     tier: 'free',
     badge: 'FREE / STABLE',
-    description: 'Reliable workhorse model with 1M token context on free tier.',
+    description: 'Reliable workhorse model with high rate limits.',
     latency: 'Fast',
   },
   {
@@ -127,7 +119,7 @@ export interface UserSettings {
 
 export const DEFAULT_SETTINGS: UserSettings = {
   googleApiKey: '',
-  geminiModel: 'gemini-2.0-flash',
+  geminiModel: 'gemini-3.8-flash',
   sourceLanguage: 'auto',
   targetLanguage: 'fa',
   voiceGender: 'FEMALE',

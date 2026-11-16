@@ -85,13 +85,17 @@ export default function SidePanelApp() {
     setTestingVoice(true);
     setTestVoiceMsg('Synthesizing test voice...');
 
+    const modelToUse = (settings.geminiModel || 'gemini-3.8-flash').includes('gemini-2.0')
+      ? 'gemini-3.8-flash'
+      : settings.geminiModel || 'gemini-3.8-flash';
+
     try {
       const phrase = 'Transora live neural voice test.';
       const res = await translateTextWithGemini(
         phrase,
         settings.targetLanguage,
         settings.googleApiKey,
-        settings.geminiModel || 'gemini-2.0-flash'
+        modelToUse
       );
 
       setTestVoiceMsg(res.translatedText);
@@ -106,7 +110,7 @@ export default function SidePanelApp() {
           settings.targetLanguage,
           settings.googleApiKey,
           settings.voiceGender,
-          settings.geminiModel || 'gemini-2.0-flash'
+          modelToUse
         );
         await playAudioBuffer(audioCtx, pcm);
         played = true;
@@ -779,7 +783,7 @@ export default function SidePanelApp() {
                     type="text"
                     value={customModelInput}
                     onChange={(e) => setCustomModelInput(e.target.value)}
-                    placeholder="e.g. gemini-2.0-flash-thinking-exp"
+                    placeholder="e.g. gemini-3.8-flash"
                     className="flex-1 px-2.5 py-1.5 bg-slate-950 border border-white/10 rounded-lg text-[11px] text-white focus:outline-none focus:border-indigo-400 font-mono"
                   />
                   <button

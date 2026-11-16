@@ -30,7 +30,7 @@ export async function translateAudioWithGemini(
   mimeType: string,
   targetLang: SupportedLanguage,
   apiKey: string,
-  model = 'gemini-2.0-flash'
+  model = 'gemini-3.8-flash'
 ): Promise<{ speechDetected: boolean; originalText: string; translatedText: string; latencyMs: number }> {
   const startTime = performance.now();
   const targetLangName = LANGUAGE_NAME_MAP[targetLang] || targetLang;
@@ -55,7 +55,10 @@ If no speech:
   "translated": ""
 }`;
 
-  const cleanModel = model.replace(/^models\//, '');
+  let cleanModel = (model || 'gemini-3.8-flash').replace(/^models\//, '');
+  if (cleanModel.includes('gemini-2.0')) {
+    cleanModel = 'gemini-3.8-flash';
+  }
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey.trim()}`;
 
   const payload = {
@@ -87,7 +90,12 @@ If no speech:
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => null);
-    throw new Error(errorData?.error?.message || `Gemini API error: ${response.status}`);
+    const msg = errorData?.error?.message || `Gemini API error: ${response.status}`;
+    if (msg.includes('no longer available') || msg.includes('not found') || msg.includes('deprecated')) {
+      const fallbackModel = cleanModel !== 'gemini-3.8-flash' ? 'gemini-3.8-flash' : 'gemini-1.5-flash';
+      return translateAudioWithGemini(audioBase64, mimeType, targetLang, apiKey, fallbackModel);
+    }
+    throw new Error(msg);
   }
 
   const data = await response.json();
@@ -119,7 +127,7 @@ export async function translateTextWithGemini(
   text: string,
   targetLang: SupportedLanguage,
   apiKey: string,
-  model = 'gemini-1.5-flash'
+  model = 'gemini-3.8-flash'
 ): Promise<TranslationResult> {
   const startTime = performance.now();
   const targetLangName = LANGUAGE_NAME_MAP[targetLang] || targetLang;
@@ -134,7 +142,10 @@ Requirements:
 Text to translate:
 "${text}"`;
 
-  const cleanModel = (model || 'gemini-2.0-flash').replace(/^models\//, '');
+  let cleanModel = (model || 'gemini-3.8-flash').replace(/^models\//, '');
+  if (cleanModel.includes('gemini-2.0')) {
+    cleanModel = 'gemini-3.8-flash';
+  }
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey.trim()}`;
 
   const payload = {
@@ -158,7 +169,12 @@ Text to translate:
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => null);
-    throw new Error(errorData?.error?.message || `Gemini API error: ${response.status}`);
+    const msg = errorData?.error?.message || `Gemini API error: ${response.status}`;
+    if (msg.includes('no longer available') || msg.includes('not found') || msg.includes('deprecated')) {
+      const fallbackModel = cleanModel !== 'gemini-3.8-flash' ? 'gemini-3.8-flash' : 'gemini-1.5-flash';
+      return translateTextWithGemini(text, targetLang, apiKey, fallbackModel);
+    }
+    throw new Error(msg);
   }
 
   const data = await response.json();
@@ -243,7 +259,7 @@ export async function synthesizeSpeechGoogleCloud(
 }
 
 /**
- * Native Neural Audio Generation via Google Gemini 2.0 Flash API
+ * Native Neural Audio Generation via Google Gemini Flash API
  * Works using standard Gemini API keys (including free Google AI Studio keys) without requiring Cloud billing!
  */
 export async function synthesizeSpeechGeminiAudio(
@@ -251,10 +267,13 @@ export async function synthesizeSpeechGeminiAudio(
   targetLang: SupportedLanguage,
   apiKey: string,
   gender: 'FEMALE' | 'MALE' | 'NEUTRAL' = 'FEMALE',
-  model = 'gemini-2.0-flash'
+  model = 'gemini-3.8-flash'
 ): Promise<ArrayBuffer> {
   const targetLangName = LANGUAGE_NAME_MAP[targetLang] || targetLang;
-  const cleanModel = (model || 'gemini-2.0-flash').replace(/^models\//, '');
+  let cleanModel = (model || 'gemini-3.8-flash').replace(/^models\//, '');
+  if (cleanModel.includes('gemini-2.0')) {
+    cleanModel = 'gemini-3.8-flash';
+  }
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey.trim()}`;
 
   const voiceName = gender === 'MALE' ? 'Puck' : 'Aoede';
@@ -289,7 +308,12 @@ export async function synthesizeSpeechGeminiAudio(
 
   if (!response.ok) {
     const err = await response.json().catch(() => null);
-    throw new Error(err?.error?.message || `Gemini audio generation error: ${response.status}`);
+    const msg = err?.error?.message || `Gemini audio generation error: ${response.status}`;
+    if (msg.includes('no longer available') || msg.includes('not found') || msg.includes('deprecated')) {
+      const fallbackModel = cleanModel !== 'gemini-3.8-flash' ? 'gemini-3.8-flash' : 'gemini-1.5-flash';
+      return synthesizeSpeechGeminiAudio(text, targetLang, apiKey, gender, fallbackModel);
+    }
+    throw new Error(msg);
   }
 
   const data = await response.json();
