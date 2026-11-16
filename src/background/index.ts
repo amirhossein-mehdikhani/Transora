@@ -1,357 +1,145 @@
-import { DubbingState, ExtensionMessage, UserSettings, DEFAULT_SETTINGS } from '../types';
-import { getStoredSettings, saveStoredSettings, appendStoredTranscript } from '../services/storage';
-
-let currentState: DubbingState = {
-  status: 'idle',
-  audioLevel: 0,
-  isDucking: false,
-  stats: {
-    latencyMs: 0,
-    sentencesDubbed: 0,
-    bytesProcessed: 0,
-  },
-};
-
-let currentSettings: UserSettings = DEFAULT_SETTINGS;
-
-// Initialize settings
-getStoredSettings().then((settings) => {
-  currentSettings = settings;
-});
-
-// Manage Offscreen Document for Tab Capture & Audio Processing
-async function setupOffscreenDocument(path: string): Promise<void> {
-  const offscreenUrl = chrome.runtime.getURL(path);
-  const existingContexts = await chrome.runtime.getContexts({
-    contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
-    documentUrls: [offscreenUrl],
-  });
-
-  if (existingContexts.length > 0) {
-    return;
+import type { DubbingState, UserSettings } from '../types';
+import { getStoredSettings, saveStoredSettings, appendStoredTranscript, clearStoredTranscripts } from '../services/storage';
+import { idleState } from '../services/session';
+let state = idleState();
+let settings: UserSettings;
+let sessionId: string | undefined;
+let operation = Promise.resolve();
+const ready = Promise.all([getStoredSettings(), chrome.storage.session.get('session')]).then(async ([saved, cached]) => {
+  settings = saved;
+  if (cached.session) {
+    const contexts = await chrome.runtime.getContexts({ contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT] });
+    if (contexts.length) ({ state, sessionId } = cached.session);
+    else await chrome.storage.session.set({ session: { state, sessionId } });
   }
-
-  await chrome.offscreen.createDocument({
-    url: path,
-    reasons: [
-      chrome.offscreen.Reason.USER_MEDIA,
-      chrome.offscreen.Reason.AUDIO_PLAYBACK,
-    ],
-    justification: 'Real-time tab audio capture, ducking, and voice synthesis for live dubbing',
-  });
+});
+async function publish(next: DubbingState, persist = true) {
+  const previousTab = state.activeTabId;
+  const statusChanged = next.status !== state.status;
+  state = next;
+  if (persist) await chrome.storage.session.set({ session: { state, sessionId } });
+  if (statusChanged) await chrome.action.setBadgeText({ text: state.status === 'error' ? 'ERR' : ['listening', 'dubbing'].includes(state.status) ? 'LIVE' : '' });
+  if (statusChanged) void chrome.action.setBadgeBackgroundColor({ color: state.status === 'error' ? '#EF4444' : '#6366F1' });
+  void chrome.runtime.sendMessage({ type: 'STATE_CHANGED', state }).catch(() => {});
+  for (const tabId of new Set([previousTab, state.activeTabId])) {
+    if (tabId !== undefined) void chrome.tabs.sendMessage(tabId, { type: 'STATE_CHANGED', state }).catch(() => {});
+  }
 }
-
-async function closeOffscreenDocument(): Promise<void> {
-  const existingContexts = await chrome.runtime.getContexts({
-    contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
-  });
-
-  if (existingContexts.length > 0) {
+async function stop() {
+  sessionId = undefined;
+  if (state.activeTabId !== undefined) await chrome.tabs.sendMessage(state.activeTabId, { type: 'CANCEL_SPEECH' }).catch(() => {});
+  const contexts = await chrome.runtime.getContexts({ contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT] });
+  if (contexts.length) {
+    await chrome.runtime.sendMessage({ target: 'offscreen', type: 'STOP' }).catch(() => {});
     await chrome.offscreen.closeDocument();
   }
+  await publish({ ...idleState(), stats: state.stats });
 }
-
-function updateBadge(status: DubbingState['status']) {
-  if (status === 'dubbing' || status === 'listening') {
-    chrome.action.setBadgeText({ text: 'LIVE' });
-    chrome.action.setBadgeBackgroundColor({ color: '#6366F1' });
-  } else if (status === 'error') {
-    chrome.action.setBadgeText({ text: 'ERR' });
-    chrome.action.setBadgeBackgroundColor({ color: '#EF4444' });
-  } else {
-    chrome.action.setBadgeText({ text: '' });
-  }
+async function start(tabId: number) {
+  settings = await getStoredSettings();
+  if (!settings.googleApiKey.trim()) throw new Error('Enter your Google API key in Settings first.');
+  if (state.activeTabId === tabId && ['initializing', 'listening', 'dubbing'].includes(state.status)) return;
+  await stop();
+  sessionId = crypto.randomUUID();
+  await publish({ ...idleState(), status: 'initializing', activeTabId: tabId });
+  try {
+    const streamId = await new Promise<string>((resolve, reject) => {
+      chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, id => {
+        const error = chrome.runtime.lastError;
+        if (error || !id) reject(new Error(error?.message || 'Click the Transora toolbar icon on this tab before starting capture.'));
+        else resolve(id);
+      });
+    });
+    await chrome.offscreen.createDocument({ url: 'src/offscreen/index.html', reasons: [chrome.offscreen.Reason.USER_MEDIA, chrome.offscreen.Reason.AUDIO_PLAYBACK], justification: 'Capture and dub tab audio while keeping original audio audible' });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const response = await Promise.race([
+      chrome.runtime.sendMessage({ target: 'offscreen', type: 'START', streamId, settings, sessionId, tabId }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Audio capture timed out. Try starting again from the toolbar icon.')), 15000); }),
+    ]).finally(() => clearTimeout(timer));
+    if (!response?.success) throw new Error(response?.error || 'Audio capture did not start.');
+    await publish({ ...state, status: 'listening' });
+  } catch (error) { await stop(); throw error; }
 }
-
-function broadcastState(state: DubbingState) {
-  currentState = state;
-  updateBadge(state.status);
-
-  // Send to all tabs and extension views
-  chrome.runtime.sendMessage({ type: 'STATE_CHANGED', state }).catch(() => {});
-
-  if (state.activeTabId) {
-    chrome.tabs.sendMessage(state.activeTabId, { type: 'STATE_CHANGED', state }).catch(() => {});
-  }
-}
-
-// Message Listener
-chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendResponse) => {
-  handleMessage(message, sender).then(sendResponse);
-  return true; // Keep channel open for async response
-});
-
-async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.MessageSender) {
-  switch (message.type) {
-    case 'GET_STATE': {
-      return { state: currentState, settings: currentSettings };
-    }
-
-    case 'START_DUBBING': {
-      try {
-        const settings = await getStoredSettings();
-        currentSettings = settings;
-
-        if (!settings.googleApiKey) {
-          broadcastState({
-            ...currentState,
-            status: 'error',
-            errorMessage: 'Please enter your Google API Key in Settings to start dubbing.',
-          });
-          return { success: false, error: 'Missing API key' };
-        }
-
-        // Determine target tab
-        let tabId = message.tabId || sender.tab?.id;
-        if (!tabId) {
-          const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-          tabId = activeTab?.id;
-        }
-
-        if (!tabId) {
-          throw new Error('No active video tab found to dub.');
-        }
-
-        broadcastState({
-          ...currentState,
-          status: 'initializing',
-          activeTabId: tabId,
-          errorMessage: undefined,
-        });
-
-        // 1. Get media stream ID for tab audio capture
-        const streamId = await new Promise<string>((resolve, reject) => {
-          chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id) => {
-            if (chrome.runtime.lastError) {
-              const errMsg = chrome.runtime.lastError.message || '';
-              if (errMsg.includes('Extension has not been invoked') || errMsg.includes('activeTab')) {
-                reject(new Error('Please click the Transora icon in your Chrome toolbar (or press Alt+Shift+D) to activate audio on this tab.'));
-              } else {
-                reject(new Error(errMsg));
-              }
-            } else if (!id) {
-              reject(new Error('Failed to obtain stream ID from tab.'));
-            } else {
-              resolve(id);
-            }
-          });
-        });
-
-        // 2. Ensure Offscreen Document is running
-        await setupOffscreenDocument('src/offscreen/index.html');
-
-        // 3. Deliver streamId to offscreen document with reliable delivery check
-        const deliverCaptureToOffscreen = (retries = 5) => {
-          chrome.runtime.sendMessage(
-            {
-              type: 'OFFSCREEN_START_CAPTURE',
-              streamId,
-              settings: currentSettings,
-              tabId,
-            },
-            (response) => {
-              if (chrome.runtime.lastError || !response?.received) {
-                if (retries > 0) {
-                  setTimeout(() => deliverCaptureToOffscreen(retries - 1), 120);
-                }
-              }
-            }
-          );
-        };
-        deliverCaptureToOffscreen();
-
-        broadcastState({
-          ...currentState,
-          status: 'dubbing',
-          activeTabId: tabId,
-        });
-
-        return { success: true };
-      } catch (err: any) {
-        console.warn('Tab audio capture notice:', err.message);
-        broadcastState({
-          ...currentState,
-          status: 'error',
-          errorMessage: err.message || 'Failed to start tab audio capture',
-        });
-        return { success: false, error: err.message };
-      }
-    }
-
-    case 'START_DUBBING_WITH_STREAM': {
-      try {
-        const settings = await getStoredSettings();
-        currentSettings = settings;
-
-        if (!settings.googleApiKey) {
-          broadcastState({
-            ...currentState,
-            status: 'error',
-            errorMessage: 'Please enter your Google API Key in Settings to start dubbing.',
-          });
-          return { success: false, error: 'Missing API key' };
-        }
-
-        const tabId = message.tabId;
-        broadcastState({
-          ...currentState,
-          status: 'initializing',
-          activeTabId: tabId,
-          errorMessage: undefined,
-        });
-
-        // Ensure Offscreen Document is running
-        await setupOffscreenDocument('src/offscreen/index.html');
-
-        // Deliver streamId directly to offscreen document with reliable delivery check
-        const deliverCaptureStream = (retries = 5) => {
-          chrome.runtime.sendMessage(
-            {
-              type: 'OFFSCREEN_START_CAPTURE',
-              streamId: message.streamId,
-              settings: currentSettings,
-              tabId,
-            },
-            (response) => {
-              if (chrome.runtime.lastError || !response?.received) {
-                if (retries > 0) {
-                  setTimeout(() => deliverCaptureStream(retries - 1), 120);
-                }
-              }
-            }
-          );
-        };
-        deliverCaptureStream();
-
-        broadcastState({
-          ...currentState,
-          status: 'dubbing',
-          activeTabId: tabId,
-        });
-
-        return { success: true };
-      } catch (err: any) {
-        console.error('Failed to start dubbing with stream:', err);
-        broadcastState({
-          ...currentState,
-          status: 'error',
-          errorMessage: err.message || 'Failed to start audio stream',
-        });
-        return { success: false, error: err.message };
-      }
-    }
-
-    case 'STOP_DUBBING': {
-      try {
-        chrome.runtime.sendMessage({ type: 'OFFSCREEN_STOP_CAPTURE' }).catch(() => {});
-        await closeOffscreenDocument();
-
-        broadcastState({
-          status: 'idle',
-          activeTabId: undefined,
-          audioLevel: 0,
-          isDucking: false,
-          stats: currentState.stats,
-        });
-
-        return { success: true };
-      } catch (err: any) {
-        return { success: false, error: err.message };
-      }
-    }
-
-    case 'UPDATE_SETTINGS': {
-      const updated = await saveStoredSettings(message.settings);
-      currentSettings = updated;
-      
-      // Notify offscreen document if running
-      chrome.runtime.sendMessage({ type: 'SETTINGS_UPDATED', settings: updated }).catch(() => {});
-
-      return { success: true, settings: updated };
-    }
-
-    case 'AUDIO_LEVEL': {
-      currentState.audioLevel = message.level;
-      currentState.isDucking = message.isDucking;
-      // Pass along to active content script
-      if (currentState.activeTabId) {
-        chrome.tabs.sendMessage(currentState.activeTabId, message).catch(() => {});
-      }
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if (sender.id !== chrome.runtime.id || message.target === 'offscreen' || ['STATE_CHANGED', 'SETTINGS_UPDATED'].includes(message.type)) return;
+  const task = async () => {
+    await ready;
+    if (message.type === 'GET_STATE') return { state, settings, ownsSession: sender.tab?.id === state.activeTabId && state.activeTabId !== undefined };
+    if (message.type === 'OPEN_SIDEPANEL') {
+      const tabId = sender.tab?.id ?? (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id;
+      if (tabId !== undefined) await chrome.sidePanel.open({ tabId });
       return { success: true };
     }
-
-    case 'NEW_TRANSCRIPT': {
-      currentState.stats.sentencesDubbed += 1;
-      currentState.currentOriginalText = message.item.originalText;
-      currentState.currentTranslatedText = message.item.translatedText;
-
+    if (message.type === 'CLEAR_TRANSCRIPTS') {
+      await clearStoredTranscripts();
+      void chrome.runtime.sendMessage({ type: 'TRANSCRIPTS_CLEARED' }).catch(() => {});
+      return { success: true };
+    }
+    if (message.type === 'UPDATE_SETTINGS') {
+      const previous = settings;
+      settings = await saveStoredSettings(message.settings);
+      // Live connection configuration is fixed at setup: stop rather than silently using stale language/model/key.
+      if (sessionId && (previous.engine !== settings.engine || (previous.engine === 'gemini_live' && ['liveModel', 'targetLanguage', 'sourceLanguage', 'googleApiKey', 'voiceGender', 'voiceSpeed'].some(key => previous[key as keyof UserSettings] !== settings[key as keyof UserSettings])))) {
+        const result = operation.then(stop);
+        operation = result.catch(() => {});
+        await result;
+      }
+      void chrome.runtime.sendMessage({ type: 'SETTINGS_UPDATED', settings }).catch(() => {});
+      return { success: true, settings };
+    }
+    if (message.type === 'START_DUBBING' || message.type === 'STOP_DUBBING') {
+      const action = async () => {
+        if (message.type === 'STOP_DUBBING') await stop();
+        else {
+          const tabId = message.tabId ?? sender.tab?.id ?? (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0]?.id;
+          if (tabId === undefined) throw new Error('Open a video tab first.');
+          await start(tabId);
+        }
+      };
+      const result = operation.then(action);
+      operation = result.catch(() => {});
+      await result;
+      return { success: true };
+    }
+    if (sender.url !== chrome.runtime.getURL('src/offscreen/index.html') || !sessionId || message.sessionId !== sessionId) return;
+    if (message.type === 'ENGINE_ERROR') {
+      await stop();
+      await publish({ ...state, status: 'error', errorMessage: message.error });
+    } else if (message.type === 'ENGINE_ENDED') await stop();
+    else if (message.type === 'ENGINE_UPDATE') await publish({ ...state, ...message.patch, stats: { ...state.stats, ...message.patch.stats } }, message.patch.audioLevel === undefined);
+    else if (message.type === 'NEW_TRANSCRIPT') {
       await appendStoredTranscript(message.item);
-
-      // Forward to content script for subtitle rendering
-      if (currentState.activeTabId) {
-        chrome.tabs.sendMessage(currentState.activeTabId, message).catch(() => {});
-      }
-
-      return { success: true };
+      if (state.activeTabId !== undefined) void chrome.tabs.sendMessage(state.activeTabId, message).catch(() => {});
+    } else if (message.type === 'PLAY_SPEECH_FALLBACK') {
+      if (state.activeTabId === undefined) throw new Error('No active tab for speech playback.');
+      return await chrome.tabs.sendMessage(state.activeTabId, message);
+    } else if (message.type === 'GET_MEDIA_TIME') {
+      return state.activeTabId === undefined ? null : await chrome.tabs.sendMessage(state.activeTabId, { type: 'GET_MEDIA_TIME' }).catch(() => null);
     }
-
-    case 'OPEN_SIDEPANEL': {
-      let tabId = sender.tab?.id;
-      if (!tabId) {
-        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        tabId = activeTab?.id;
-      }
-      if (tabId && (chrome as any).sidePanel?.open) {
-        (chrome as any).sidePanel.open({ tabId }).catch(() => {});
-      }
-      return { success: true };
+    return { success: true };
+  };
+  void task().then(respond).catch(async error => {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (message.type === 'START_DUBBING') await publish({ ...state, status: 'error', errorMessage });
+    respond({ success: false, error: errorMessage });
+  });
+  return true;
+});
+chrome.commands.onCommand.addListener((command, tab) => {
+  if (command !== 'toggle-dubbing') return;
+  operation = operation.then(async () => {
+    await ready;
+    if (['initializing', 'listening', 'dubbing'].includes(state.status)) await stop();
+    else {
+      const tabId = tab?.id ?? (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0]?.id;
+      if (tabId === undefined) throw new Error('Open a video tab first.');
+      await start(tabId);
     }
-
-    case 'FALLBACK_SPEECH_ENDED': {
-      // Forward from content script to offscreen document
-      chrome.runtime.sendMessage({ type: 'FALLBACK_SPEECH_ENDED' }).catch(() => {});
-      return { success: true };
-    }
-
-    default:
-      return null;
-  }
-}
-
-// Global Keyboard Shortcut handler (Alt+Shift+D)
-chrome.commands?.onCommand?.addListener((command, tab) => {
-  if (command === 'toggle-dubbing') {
-    if (currentState.status === 'dubbing' || currentState.status === 'listening') {
-      handleMessage({ type: 'STOP_DUBBING' }, {} as any);
-    } else if (tab && typeof tab.id === 'number') {
-      const activeId = tab.id;
-      // Direct synchronous invocation inside user gesture
-      chrome.tabCapture.getMediaStreamId({ targetTabId: activeId }, (streamId) => {
-        if (streamId) {
-          handleMessage({
-            type: 'START_DUBBING_WITH_STREAM',
-            streamId,
-            tabId: activeId,
-          }, {} as any);
-        } else if (chrome.runtime.lastError) {
-          console.warn('Tab capture error on shortcut:', chrome.runtime.lastError.message);
-        }
-      });
-    } else {
-      chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
-        const activeTab = tabs[0];
-        if (activeTab?.id) {
-          chrome.tabCapture.getMediaStreamId({ targetTabId: activeTab.id }, (streamId) => {
-            if (streamId) {
-              handleMessage({
-                type: 'START_DUBBING_WITH_STREAM',
-                streamId,
-                tabId: activeTab.id!,
-              }, {} as any);
-            }
-          });
-        }
-      });
-    }
-  }
+  }).catch(error => publish({ ...state, status: 'error', errorMessage: error.message }));
+});
+chrome.tabs.onRemoved.addListener(tabId => {
+  void ready.then(() => { if (state.activeTabId === tabId) operation = operation.then(stop).catch(() => {}); });
+});
+chrome.tabs.onUpdated.addListener((tabId, change) => {
+  if (change.status === 'loading') void ready.then(() => { if (state.activeTabId === tabId) operation = operation.then(stop).catch(() => {}); });
 });

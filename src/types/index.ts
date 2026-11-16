@@ -36,12 +36,11 @@ export const SUPPORTED_LANGUAGES: LanguageOption[] = [
 
 export type VoiceGender = 'FEMALE' | 'MALE' | 'NEUTRAL';
 export type AppMode = 'video' | 'meeting';
-export type DubbingEngine = 'gemini_live' | 'google_cloud_pipeline';
 
 export interface GeminiModelOption {
   id: string;
   name: string;
-  tier: 'free' | 'paid';
+  tier: 'account';
   badge: string;
   description: string;
   latency: 'Ultra-Fast' | 'Fast' | 'Standard';
@@ -49,59 +48,21 @@ export interface GeminiModelOption {
 }
 
 export const AVAILABLE_GEMINI_MODELS: GeminiModelOption[] = [
-  // Free Tier Models
-  {
-    id: 'gemini-flash-lite-latest',
-    name: 'Gemini Flash-Lite (Latest)',
-    tier: 'free',
-    badge: 'FREE / RECOMMENDED',
-    description: 'Real-time sub-second live dubbing with lowest latency and highest availability.',
-    latency: 'Ultra-Fast',
-    recommended: true,
-  },
-  {
-    id: 'gemini-3.5-flash-lite',
-    name: 'Gemini 3.5 Flash-Lite',
-    tier: 'free',
-    badge: 'FREE / ULTRA-FAST',
-    description: 'Ultra-fast lightweight translation optimized for high-cadence streams.',
-    latency: 'Ultra-Fast',
-  },
-  {
-    id: 'gemini-3.1-flash-lite',
-    name: 'Gemini 3.1 Flash-Lite',
-    tier: 'free',
-    badge: 'FREE / FAST',
-    description: 'High-speed conversational dialogue translation.',
-    latency: 'Fast',
-  },
-  {
-    id: 'gemini-3-flash-preview',
-    name: 'Gemini 3 Flash Preview',
-    tier: 'free',
-    badge: 'FREE / PREVIEW',
-    description: 'Next-gen Flash architecture for nuanced sentence interpretation.',
-    latency: 'Fast',
-  },
-  {
-    id: 'gemini-3.8-flash',
-    name: 'Gemini 3.8 Flash',
-    tier: 'free',
-    badge: 'FREE / NEXT-GEN',
-    description: 'Deep reasoning translation for complex technical lectures.',
-    latency: 'Standard',
-  },
-  {
-    id: 'gemini-4-hydrogen',
-    name: 'Gemini 4 Hydrogen',
-    tier: 'free',
-    badge: 'NEXT-GEN EXPERIMENTAL',
-    description: 'Cutting-edge next-generation frontier architecture.',
-    latency: 'Standard',
-  },
+  { id: 'gemini-flash-lite-latest', name: 'Gemini Flash-Lite (Latest)', tier: 'account', badge: 'CHECK ACCOUNT QUOTA', description: 'Low-latency translation. Availability and pricing depend on your Google account.', latency: 'Fast', recommended: true },
 ];
 
+export const LIVE_MODELS = [
+  { id: 'gemini-3.5-live-translate-preview', name: 'Gemini 3.5 Live Translate', kind: 'translate', description: 'Recommended for continuous translated speech.' },
+  { id: 'gemini-2.5-flash-native-audio-preview-12-2025', name: 'Gemini 2.5 Flash Native Audio Dialog', kind: 'dialog', description: 'Native audio with interpreter instructions.' },
+  { id: 'gemini-3.1-flash-live-preview', name: 'Gemini 3 Flash Live (3.1 preview)', kind: 'dialog', description: 'Google’s documented Flash Live preview model ID.' },
+  { id: 'gemini-3.5-transcribe-live', name: 'Gemini 3.5 Transcribe Live', kind: 'transcribe', description: 'Source-language captions only; no translation or dubbed voice.' },
+  { id: 'gemini-3.8-live', name: 'Gemini 3.8 Live', kind: 'dialog', description: 'Native audio with interpreter instructions.' },
+  { id: 'gemini-3.8-live-extended-thinking', name: 'Gemini 3.8 Live Extended Thinking', kind: 'dialog', description: 'Reasoning-oriented; may add latency to dubbing.' },
+] as const;
+
 export interface UserSettings {
+  engine: 'gemini_live' | 'http';
+  liveModel: string;
   googleApiKey: string;
   geminiModel: string;
   sourceLanguage: string; // 'auto' or code
@@ -111,12 +72,13 @@ export interface UserSettings {
   duckingLevel: number; // 0.0 to 1.0 (e.g. 0.15 = original audio dropped to 15%)
   subtitlesEnabled: boolean;
   bilingualSubtitles: boolean;
-  dubbingEngine: DubbingEngine;
   mode: AppMode;
   audioBufferSizeMs: number;
 }
 
 export const DEFAULT_SETTINGS: UserSettings = {
+  engine: 'gemini_live',
+  liveModel: 'gemini-3.5-live-translate-preview',
   googleApiKey: '',
   geminiModel: 'gemini-flash-lite-latest',
   sourceLanguage: 'auto',
@@ -126,7 +88,6 @@ export const DEFAULT_SETTINGS: UserSettings = {
   duckingLevel: 0.18,
   subtitlesEnabled: true,
   bilingualSubtitles: true,
-  dubbingEngine: 'google_cloud_pipeline',
   mode: 'video',
   audioBufferSizeMs: 2500,
 };
@@ -134,6 +95,10 @@ export const DEFAULT_SETTINGS: UserSettings = {
 export interface TranscriptItem {
   id: string;
   timestamp: number;
+  sessionId?: string;
+  kind?: 'transcription' | 'translation';
+  startMs?: number;
+  endMs?: number;
   originalText: string;
   translatedText: string;
   sourceLang: string;

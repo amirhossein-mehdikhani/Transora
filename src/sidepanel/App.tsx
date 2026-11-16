@@ -1,3 +1,5 @@
+import { LiveControls } from '../components/LiveControls';
+import { exportSrt } from '../services/session';
 import React, { useState, useEffect } from 'react';
 import { 
   Sparkles, 
@@ -32,19 +34,11 @@ import {
 } from '../types';
 import { 
   getStoredSettings, 
-  saveStoredSettings, 
   getStoredTranscripts, 
-  clearStoredTranscripts, 
   testGoogleApiKey,
   fetchLiveGeminiModels
 } from '../services/storage';
-import { 
-  translateTextWithGemini, 
-  synthesizeSpeechGeminiAudio, 
-  synthesizeSpeechGoogleCloud, 
-  playAudioBuffer, 
-  transliteratePersianToPhonetic 
-} from '../services/google-gemini-live';
+import { testVoice } from '../services/speech';
 
 export default function SidePanelApp() {
   const [activeTab, setActiveTab] = useState<'transcripts' | 'audio' | 'api'>('transcripts');
@@ -59,8 +53,7 @@ export default function SidePanelApp() {
   const [keyTestResult, setKeyTestResult] = useState<{ success: boolean; message: string } | null>(null);
   
   // Model management state
-  const [modelFilter, setModelFilter] = useState<'all' | 'free' | 'paid'>('all');
-  const [detectedLiveModels, setDetectedLiveModels] = useState<Array<{ id: string; name: string }>>([]);
+    const [detectedLiveModels, setDetectedLiveModels] = useState<Array<{ id: string; name: string }>>([]);
   const [fetchingLiveModels, setFetchingLiveModels] = useState(false);
   const [customModelInput, setCustomModelInput] = useState('');
   const [showCustomModel, setShowCustomModel] = useState(false);
@@ -85,74 +78,12 @@ export default function SidePanelApp() {
     setTestingVoice(true);
     setTestVoiceMsg('Synthesizing test voice...');
 
-    const modelToUse = (settings.geminiModel && !settings.geminiModel.includes('gemini-2.0') && settings.geminiModel !== 'gemini-3.8-flash')
-      ? settings.geminiModel
-      : 'gemini-flash-lite-latest';
-
     try {
-      const phrase = 'Transora live neural voice test.';
-      const res = await translateTextWithGemini(
-        phrase,
-        settings.targetLanguage,
-        settings.googleApiKey,
-        modelToUse
-      );
-
-      setTestVoiceMsg(res.translatedText);
-
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      if (audioCtx.state === 'suspended') await audioCtx.resume();
-
-      let played = false;
-      try {
-        const pcm = await synthesizeSpeechGeminiAudio(
-          res.translatedText,
-          settings.targetLanguage,
-          settings.googleApiKey,
-          settings.voiceGender,
-          'gemini-3.8-flash-lite-tts'
-        );
-        await playAudioBuffer(audioCtx, pcm);
-        played = true;
-      } catch (e) {
-        try {
-          const cloudBuf = await synthesizeSpeechGoogleCloud(
-            res.translatedText,
-            settings.targetLanguage,
-            settings.googleApiKey,
-            settings.voiceGender,
-            settings.voiceSpeed
-          );
-          await playAudioBuffer(audioCtx, cloudBuf);
-          played = true;
-        } catch (e2) {}
-      }
-
-      if (!played && 'speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-        let voices = window.speechSynthesis.getVoices();
-        const match = voices.find((v) => v.lang.toLowerCase().startsWith(settings.targetLanguage.toLowerCase()));
-        let textToSay = res.translatedText;
-        let voiceToUse = match || voices.find((v) => v.default) || voices[0];
-        if (!match && settings.targetLanguage === 'fa') {
-          textToSay = transliteratePersianToPhonetic(textToSay);
-        }
-        const u = new SpeechSynthesisUtterance(textToSay);
-        if (voiceToUse) {
-          u.voice = voiceToUse;
-          u.lang = voiceToUse.lang;
-        }
-        window.speechSynthesis.speak(u);
-      }
-
-      setTestVoiceMsg('Voice output verified!');
-      setTimeout(() => setTestVoiceMsg(null), 3500);
-    } catch (err: any) {
-      setTestVoiceMsg(`Error: ${err.message}`);
-      setTimeout(() => setTestVoiceMsg(null), 4500);
-    } finally {
-      setTestingVoice(false);
-    }
+      await testVoice(settings);
+      setTestVoiceMsg('Voice playback completed.');
+    } catch (error) {
+      setTestVoiceMsg(error instanceof Error ? error.message : String(error));
+    } finally { setTestingVoice(false); }
   };
 
   useEffect(() => {
@@ -162,14 +93,19 @@ export default function SidePanelApp() {
       setApiKeyInput(s.googleApiKey || '');
     });
 
+    void chrome.runtime.sendMessage({ type: 'GET_STATE' }).then(response => { if (response?.state) setDubbingState(response.state); });
     getStoredTranscripts().then((t) => {
       setTranscripts(t);
     });
 
     // Listen for events
     const listener = (msg: any) => {
-      if (msg.type === 'NEW_TRANSCRIPT') {
-        setTranscripts((prev) => [msg.item, ...prev]);
+      if (msg.type === 'TRANSCRIPTS_CLEARED') { setTranscripts([]);
+      } else if (msg.type === 'NEW_TRANSCRIPT') {
+        setTranscripts((prev) => [msg.item, ...prev.filter(item => item.id !== msg.item.id)].slice(0, 150));
+      } else if (msg.type === 'SETTINGS_UPDATED') {
+        setSettings(msg.settings);
+        setApiKeyInput(msg.settings.googleApiKey);
       } else if (msg.type === 'STATE_CHANGED') {
         setDubbingState(msg.state);
       } else if (msg.type === 'AUDIO_LEVEL') {
@@ -186,12 +122,11 @@ export default function SidePanelApp() {
   }, []);
 
   const handleUpdateSetting = async <K extends keyof UserSettings>(key: K, value: UserSettings[K]) => {
-    const updated = await saveStoredSettings({ [key]: value });
-    setSettings(updated);
-    chrome.runtime.sendMessage({
+    const response = await chrome.runtime.sendMessage({
       type: 'UPDATE_SETTINGS',
       settings: { [key]: value },
     });
+    if (response?.settings) setSettings(response.settings);
   };
 
   const handleTestKey = async () => {
@@ -215,35 +150,19 @@ export default function SidePanelApp() {
     setFetchingLiveModels(false);
   };
 
-  const filteredModels = AVAILABLE_GEMINI_MODELS.filter((m) => {
-    if (modelFilter === 'all') return true;
-    return m.tier === modelFilter;
-  });
+  const filteredModels = AVAILABLE_GEMINI_MODELS;
 
   const handleClearTranscripts = async () => {
-    await clearStoredTranscripts();
+    await chrome.runtime.sendMessage({ type: 'CLEAR_TRANSCRIPTS' });
     setTranscripts([]);
   };
 
   const handleExportSRT = () => {
     if (transcripts.length === 0) return;
 
-    let srtContent = '';
-    const sorted = [...transcripts].reverse();
-
-    sorted.forEach((item, index) => {
-      const startTime = new Date(item.timestamp).toISOString().substring(11, 23).replace('.', ',');
-      const endTime = new Date(item.timestamp + 3000).toISOString().substring(11, 23).replace('.', ',');
-
-      srtContent += `${index + 1}\n`;
-      srtContent += `${startTime} --> ${endTime}\n`;
-      srtContent += `${item.translatedText}\n`;
-      if (settings.bilingualSubtitles) {
-        srtContent += `${item.originalText}\n`;
-      }
-      srtContent += '\n';
-    });
-
+    const sessionId = transcripts.find(item => item.sessionId)?.sessionId;
+    const srtContent = exportSrt(transcripts.filter(item => item.sessionId === sessionId), settings.bilingualSubtitles);
+    if (!srtContent) { alert('Older transcripts have no timeline. Record a new session to export aligned subtitles.'); return; }
     const blob = new Blob([srtContent], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -420,6 +339,9 @@ export default function SidePanelApp() {
         </div>
       )}
 
+<LiveControls settings={settings} onChange={patch => {
+          void chrome.runtime.sendMessage({ type: 'UPDATE_SETTINGS', settings: patch }).then(response => { if (response?.settings) setSettings(response.settings); });
+        }} />
       {/* Tab 2: Audio & Voice Settings */}
       {activeTab === 'audio' && (
         <div className="flex-1 overflow-y-auto p-4 space-y-5 text-xs">
@@ -461,6 +383,12 @@ export default function SidePanelApp() {
             </div>
           </div>
 
+          <div className="p-4 rounded-2xl bg-slate-900/60 border border-white/10 space-y-2">
+            <label htmlFor="audio-segment" className="block text-sm text-white">Audio segment duration: {settings.audioBufferSizeMs / 1000}s</label>
+            <input id="audio-segment" type="range" min="1000" max="8000" step="500" value={settings.audioBufferSizeMs}
+              onChange={event => handleUpdateSetting('audioBufferSizeMs', Number(event.target.value))} className="w-full accent-cyan-400" />
+            <p className="text-xs text-slate-400">Longer segments reduce request frequency. Live Call caps segments at 1.5s. Changes apply to new segments.</p>
+          </div>
           {/* Audio Ducking */}
           <div className="p-4 rounded-2xl bg-slate-900/60 border border-white/10 space-y-3">
             <div className="flex items-center justify-between">
@@ -589,7 +517,7 @@ export default function SidePanelApp() {
               <div>
                 <h3 className="font-semibold text-white">Bring Your Own Key (BYOK)</h3>
                 <p className="text-[11px] text-slate-400 mt-0.5">
-                  Your Google API Key stays private and encrypted directly inside your browser's local storage.
+                  Your API key is stored locally in this browser without encryption. Audio and text are sent to Google for processing.
                 </p>
               </div>
             </div>
@@ -654,7 +582,7 @@ export default function SidePanelApp() {
                   <Zap className="w-3.5 h-3.5 text-cyan-400" />
                   <span>Gemini Model Catalog</span>
                 </p>
-                <p className="text-[10px] text-slate-400">Select free high-speed or pro reasoning tiers</p>
+                <p className="text-[10px] text-slate-400">HTTP translation models. Live models use the selector above.</p>
               </div>
 
               {/* Refresh / Auto-detect models from API */}
@@ -669,48 +597,13 @@ export default function SidePanelApp() {
               </button>
             </div>
 
-            {/* Filter Tabs: All, Free Tier, Paid Tier */}
-            <div className="flex items-center gap-1 bg-black/40 p-1 rounded-xl border border-white/5 text-[11px]">
-              <button
-                onClick={() => setModelFilter('all')}
-                className={`flex-1 py-1 rounded-lg font-medium transition-all ${
-                  modelFilter === 'all'
-                    ? 'bg-indigo-600 text-white shadow'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                All Models
-              </button>
-              <button
-                onClick={() => setModelFilter('free')}
-                className={`flex-1 py-1 rounded-lg font-medium transition-all ${
-                  modelFilter === 'free'
-                    ? 'bg-emerald-600 text-white shadow'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                🟢 Free Tier
-              </button>
-              <button
-                onClick={() => setModelFilter('paid')}
-                className={`flex-1 py-1 rounded-lg font-medium transition-all ${
-                  modelFilter === 'paid'
-                    ? 'bg-violet-600 text-white shadow'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                💎 Paid / Pro
-              </button>
-            </div>
-
-            {/* Models Cards List */}
-            <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+            <div className="space-y-2">
               {filteredModels.map((model) => {
                 const isSelected = settings.geminiModel === model.id;
                 return (
                   <div
                     key={model.id}
-                    onClick={() => handleUpdateSetting('geminiModel', model.id)}
+                    onClick={() => { void chrome.runtime.sendMessage({ type: 'UPDATE_SETTINGS', settings: { geminiModel: model.id, engine: 'http' } }); }}
                     className={`p-2.5 rounded-xl border cursor-pointer transition-all ${
                       isSelected
                         ? 'bg-indigo-950/40 border-indigo-500/70 shadow-[0_0_12px_rgba(99,102,241,0.25)]'
@@ -725,7 +618,7 @@ export default function SidePanelApp() {
                       
                       <div className="flex items-center gap-1.5">
                         <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-md ${
-                          model.tier === 'free'
+                          model.recommended
                             ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                             : 'bg-violet-500/20 text-violet-300 border border-violet-500/30'
                         }`}>
@@ -752,7 +645,10 @@ export default function SidePanelApp() {
                     {detectedLiveModels.slice(0, 6).map((dm) => (
                       <button
                         key={dm.id}
-                        onClick={() => handleUpdateSetting('geminiModel', dm.id)}
+                        onClick={() => {
+                          const live = /live|native-audio/.test(dm.id);
+                          void chrome.runtime.sendMessage({ type: 'UPDATE_SETTINGS', settings: live ? { liveModel: dm.id, engine: 'gemini_live' } : { geminiModel: dm.id, engine: 'http' } });
+                        }}
                         className={`p-1.5 rounded-lg border text-left text-[10px] truncate transition-colors ${
                           settings.geminiModel === dm.id
                             ? 'bg-cyan-500/20 border-cyan-500 text-cyan-200'
@@ -783,13 +679,13 @@ export default function SidePanelApp() {
                     type="text"
                     value={customModelInput}
                     onChange={(e) => setCustomModelInput(e.target.value)}
-                    placeholder="e.g. gemini-3.8-flash"
+                    placeholder="e.g. gemini-flash-lite-latest"
                     className="flex-1 px-2.5 py-1.5 bg-slate-950 border border-white/10 rounded-lg text-[11px] text-white focus:outline-none focus:border-indigo-400 font-mono"
                   />
                   <button
                     onClick={() => {
                       if (customModelInput.trim()) {
-                        handleUpdateSetting('geminiModel', customModelInput.trim());
+                        void chrome.runtime.sendMessage({ type: 'UPDATE_SETTINGS', settings: /live|native-audio/.test(customModelInput) ? { liveModel: customModelInput.trim(), engine: 'gemini_live' } : { geminiModel: customModelInput.trim(), engine: 'http' } });
                         setShowCustomModel(false);
                       }
                     }}
@@ -826,7 +722,7 @@ export default function SidePanelApp() {
               <li>Visit <strong className="text-slate-200">Google AI Studio</strong>.</li>
               <li>Sign in with your Google account.</li>
               <li>Click <strong className="text-slate-200">"Create API Key"</strong>.</li>
-              <li>Copy and paste the key here. Free tier provides generous daily quotas!</li>
+              <li>Copy and paste the key here. Availability, billing and quotas depend on your Google project.</li>
             </ol>
           </div>
         </div>

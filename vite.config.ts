@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [react()],
   build: {
     outDir: 'dist',
-    emptyOutDir: true,
+    emptyOutDir: !process.argv.includes('--watch'),
     rollupOptions: {
       input: {
         popup: resolve(__dirname, 'src/popup/index.html'),

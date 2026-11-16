@@ -1,4 +1,4 @@
-import { SupportedLanguage } from '../types';
+import type { SupportedLanguage } from '../types';
 
 export interface TranslationResult {
   originalText: string;
@@ -30,12 +30,14 @@ export async function translateAudioWithGemini(
   mimeType: string,
   targetLang: SupportedLanguage,
   apiKey: string,
-  model = 'gemini-flash-lite-latest'
+  model = 'gemini-flash-lite-latest',
+  signal?: AbortSignal,
+  sourceLang = 'auto'
 ): Promise<{ speechDetected: boolean; originalText: string; translatedText: string; latencyMs: number }> {
   const startTime = performance.now();
   const targetLangName = LANGUAGE_NAME_MAP[targetLang] || targetLang;
 
-  const prompt = `Listen carefully to this audio segment recorded from a video.
+  const prompt = `Listen carefully to this audio segment recorded from a video. Source language: ${sourceLang}.
 Task:
 1. Detect if any human speech is present.
 2. If speech is present, transcribe the exact spoken words into English (or original language) and translate them into natural, conversational, fluent ${targetLangName}.
@@ -56,13 +58,7 @@ If no speech:
 }`;
 
   let cleanModel = (model || 'gemini-flash-lite-latest').replace(/^models\//, '');
-  if (
-    cleanModel.includes('gemini-2.0') || 
-    cleanModel.includes('gemini-2.5-flash') ||
-    cleanModel === 'gemini-3.8-flash'
-  ) {
-    cleanModel = 'gemini-flash-lite-latest';
-  }
+
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey.trim()}`;
 
   const payload = {
@@ -89,14 +85,15 @@ If no speech:
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(30000)]),
     body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => null);
     const msg = errorData?.error?.message || `Gemini API error: ${response.status}`;
-    if (cleanModel !== 'gemini-flash-lite-latest') {
-      return translateAudioWithGemini(audioBase64, mimeType, targetLang, apiKey, 'gemini-flash-lite-latest');
+    if ([404, 400].includes(response.status) && cleanModel !== 'gemini-flash-lite-latest') {
+      return translateAudioWithGemini(audioBase64, mimeType, targetLang, apiKey, 'gemini-flash-lite-latest', signal, sourceLang);
     }
     throw new Error(msg);
   }
@@ -107,6 +104,7 @@ If no speech:
 
   try {
     const parsed = JSON.parse(rawText);
+    if (typeof parsed.speechDetected !== 'boolean' || typeof parsed.original !== 'string' || typeof parsed.translated !== 'string') throw new Error('Invalid translation response.');
     return {
       speechDetected: Boolean(parsed.speechDetected && parsed.translated?.trim().length > 0),
       originalText: parsed.original || '',
@@ -114,12 +112,7 @@ If no speech:
       latencyMs,
     };
   } catch (e) {
-    return {
-      speechDetected: false,
-      originalText: '',
-      translatedText: '',
-      latencyMs,
-    };
+    throw new Error('Translation returned invalid JSON. Try a different model.');
   }
 }
 
@@ -130,7 +123,8 @@ export async function translateTextWithGemini(
   text: string,
   targetLang: SupportedLanguage,
   apiKey: string,
-  model = 'gemini-flash-lite-latest'
+  model = 'gemini-flash-lite-latest',
+  signal?: AbortSignal
 ): Promise<TranslationResult> {
   const startTime = performance.now();
   const targetLangName = LANGUAGE_NAME_MAP[targetLang] || targetLang;
@@ -146,13 +140,7 @@ Text to translate:
 "${text}"`;
 
   let cleanModel = (model || 'gemini-flash-lite-latest').replace(/^models\//, '');
-  if (
-    cleanModel.includes('gemini-2.0') || 
-    cleanModel.includes('gemini-2.5-flash') ||
-    cleanModel === 'gemini-3.8-flash'
-  ) {
-    cleanModel = 'gemini-flash-lite-latest';
-  }
+
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey.trim()}`;
 
   const payload = {
@@ -177,6 +165,7 @@ Text to translate:
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(30000)]),
     body: JSON.stringify(payload)
   });
 
@@ -195,6 +184,7 @@ Text to translate:
 
   const latencyMs = Math.round(performance.now() - startTime);
 
+  if (!cleanTranslation) throw new Error('Translation returned no text.');
   return {
     originalText: text,
     translatedText: cleanTranslation,
@@ -210,7 +200,8 @@ export async function synthesizeSpeechGoogleCloud(
   targetLang: SupportedLanguage,
   apiKey: string,
   gender: 'FEMALE' | 'MALE' | 'NEUTRAL' = 'FEMALE',
-  speed = 1.0
+  speed = 1.0,
+  signal?: AbortSignal
 ): Promise<ArrayBuffer> {
   const langCodeMap: Record<SupportedLanguage, string> = {
     fa: 'fa-IR',
@@ -247,6 +238,7 @@ export async function synthesizeSpeechGoogleCloud(
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(30000)]),
     body: JSON.stringify(payload)
   });
 
@@ -279,11 +271,12 @@ export async function synthesizeSpeechGeminiAudio(
   targetLang: SupportedLanguage,
   apiKey: string,
   gender: 'FEMALE' | 'MALE' | 'NEUTRAL' = 'FEMALE',
-  model = 'gemini-3.8-flash-lite-tts'
+  model = 'gemini-3.1-flash-tts-preview',
+  signal?: AbortSignal
 ): Promise<ArrayBuffer> {
-  let cleanModel = (model || 'gemini-3.8-flash-lite-tts').replace(/^models\//, '');
+  let cleanModel = (model || 'gemini-3.1-flash-tts-preview').replace(/^models\//, '');
   if (!cleanModel.includes('tts')) {
-    cleanModel = 'gemini-3.8-flash-lite-tts';
+    cleanModel = 'gemini-3.1-flash-tts-preview';
   }
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey.trim()}`;
 
@@ -312,12 +305,13 @@ export async function synthesizeSpeechGeminiAudio(
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(30000)]),
     body: JSON.stringify(payload)
   });
 
   if (!response.ok) {
     if (cleanModel !== 'gemini-3.1-flash-tts-preview') {
-      return synthesizeSpeechGeminiAudio(text, targetLang, apiKey, gender, 'gemini-3.1-flash-tts-preview');
+      return synthesizeSpeechGeminiAudio(text, targetLang, apiKey, gender, 'gemini-3.1-flash-tts-preview', signal);
     }
     const err = await response.json().catch(() => null);
     throw new Error(err?.error?.message || `Gemini audio generation error: ${response.status}`);
@@ -338,93 +332,46 @@ export async function synthesizeSpeechGeminiAudio(
     bytes[i] = binaryString.charCodeAt(i);
   }
 
-  return bytes.buffer;
+  const mime = String(audioPart.inlineData.mimeType || '');
+  if (!/audio\/(L16|pcm)/i.test(mime)) throw new Error('Unsupported Gemini audio format: ' + mime);
+  const rate = Number(mime.match(/rate=(\d+)/i)?.[1] || 24000);
+  if (!Number.isFinite(rate) || rate < 8000 || rate > 192000 || bytes.byteLength % 2) throw new Error('Invalid PCM audio response.');
+  // Wrap documented mono PCM in WAV so malformed compressed audio is never played as noise.
+  const wav = new ArrayBuffer(44 + bytes.byteLength);
+  const view = new DataView(wav);
+  const tag = (offset: number, value: string) => [...value].forEach((char, index) => view.setUint8(offset + index, char.charCodeAt(0)));
+  tag(0, 'RIFF'); view.setUint32(4, 36 + bytes.byteLength, true); tag(8, 'WAVE');
+  tag(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  tag(36, 'data'); view.setUint32(40, bytes.byteLength, true); new Uint8Array(wav, 44).set(bytes);
+  return wav;
 }
 
 /**
  * Decodes and plays raw PCM or container audio buffers into an AudioContext
  */
-export async function playAudioBuffer(audioCtx: AudioContext, buffer: ArrayBuffer): Promise<void> {
+export async function playAudioBuffer(audioCtx: AudioContext, buffer: ArrayBuffer, signal?: AbortSignal, speed = 1, onStart?: () => void): Promise<void> {
+  signal?.throwIfAborted();
   if (audioCtx.state === 'suspended') {
     await audioCtx.resume();
   }
 
   let decodedBuffer: AudioBuffer | null = null;
 
-  // 1. Try native Web Audio decodeAudioData (handles MP3, WAV containers)
-  try {
-    const copy = buffer.slice(0);
-    decodedBuffer = await audioCtx.decodeAudioData(copy);
-  } catch (err) {
-    // 2. If container decode fails, treat as raw 24kHz 16-bit little-endian PCM
-    try {
-      const numSamples = Math.floor(buffer.byteLength / 2);
-      const dataView = new DataView(buffer);
-      const float32 = new Float32Array(numSamples);
-      for (let i = 0; i < numSamples; i++) {
-        const int16 = dataView.getInt16(i * 2, true);
-        float32[i] = int16 < 0 ? int16 / 32768 : int16 / 32767;
-      }
-      decodedBuffer = audioCtx.createBuffer(1, numSamples, 24000);
-      decodedBuffer.getChannelData(0).set(float32);
-    } catch (pcmErr) {
-      console.warn('PCM conversion error:', pcmErr);
-      throw pcmErr;
-    }
-  }
-
-  if (!decodedBuffer) return;
+  decodedBuffer = await audioCtx.decodeAudioData(buffer.slice(0));
 
   const source = audioCtx.createBufferSource();
+  signal?.throwIfAborted();
   source.buffer = decodedBuffer;
+  source.playbackRate.value = speed;
   source.connect(audioCtx.destination);
 
-  return new Promise<void>((resolve) => {
-    source.onended = () => resolve();
+  return new Promise<void>((resolve, reject) => {
+    const cancel = () => { source.onended = null; try { source.stop(); } catch {} source.disconnect(); reject(new DOMException('Cancelled', 'AbortError')); };
+    signal?.addEventListener('abort', cancel, { once: true });
+    source.onended = () => { signal?.removeEventListener('abort', cancel); source.disconnect(); resolve(); };
+    onStart?.();
     source.start();
-  });
-}
-
-/**
- * Phonetic transliteration for Persian to allow Latin/English voices
- * on platforms like Linux eSpeak/speech-dispatcher to speak audibly instead of muting!
- */
-export function transliteratePersianToPhonetic(persian: string): string {
-  const map: Record<string, string> = {
-    'آ': 'aa', 'ا': 'a', 'ب': 'b', 'پ': 'p', 'ت': 't', 'ث': 's',
-    'ج': 'j', 'چ': 'ch', 'ح': 'h', 'خ': 'kh', 'د': 'd', 'ذ': 'z',
-    'ر': 'r', 'ز': 'z', 'ژ': 'zh', 'س': 's', 'ش': 'sh', 'ص': 's',
-    'ض': 'z', 'ط': 't', 'ظ': 'z', 'ع': 'a', 'غ': 'gh', 'ف': 'f',
-    'ق': 'gh', 'ک': 'k', 'گ': 'g', 'ل': 'l', 'م': 'm', 'ن': 'n',
-    'و': 'o', 'ه': 'h', 'ی': 'i', 'ئ': 'e', 'ي': 'i', 'ك': 'k',
-    'ة': 'e', 'ؤ': 'o', '؟': '?', '،': ',', '؛': ';'
-  };
-  return persian.split('').map((c) => (map[c] !== undefined ? map[c] : c)).join('');
-}
-
-/**
- * Fallback Web Speech API Speech Synthesis for zero-latency or non-cloud fallback
- */
-export function synthesizeWithWebSpeech(
-  text: string,
-  lang: string,
-  speed = 1.0
-): Promise<void> {
-  return new Promise((resolve) => {
-    if (!('speechSynthesis' in window)) {
-      resolve();
-      return;
-    }
-
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = lang;
-    utterance.rate = speed;
-
-    utterance.onend = () => resolve();
-    utterance.onerror = () => resolve();
-
-    window.speechSynthesis.speak(utterance);
   });
 }
 

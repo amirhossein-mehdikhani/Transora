@@ -1,3 +1,4 @@
+import { LiveControls } from '../components/LiveControls';
 import React, { useEffect, useState } from 'react';
 import { 
   Sparkles, 
@@ -20,13 +21,7 @@ import {
   SupportedLanguage,
   AVAILABLE_GEMINI_MODELS
 } from '../types';
-import { 
-  translateTextWithGemini, 
-  synthesizeSpeechGeminiAudio, 
-  synthesizeSpeechGoogleCloud, 
-  playAudioBuffer, 
-  transliteratePersianToPhonetic 
-} from '../services/google-gemini-live';
+import { testVoice } from '../services/speech';
 
 export default function PopupApp() {
   const [state, setState] = useState<DubbingState>({
@@ -53,77 +48,12 @@ export default function PopupApp() {
     setTestingAudio(true);
     setTestAudioStatus('Translating & synthesizing voice...');
 
-    const modelToUse = (settings.geminiModel && !settings.geminiModel.includes('gemini-2.0') && settings.geminiModel !== 'gemini-3.8-flash')
-      ? settings.geminiModel
-      : 'gemini-flash-lite-latest';
-
     try {
-      const phrase = 'Hello! Transora live dubbing audio is working.';
-      const res = await translateTextWithGemini(
-        phrase,
-        settings.targetLanguage,
-        settings.googleApiKey,
-        modelToUse
-      );
-
-      setTestAudioStatus(res.translatedText);
-
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      if (audioCtx.state === 'suspended') await audioCtx.resume();
-
-      // Tier 1: Gemini Audio
-      let played = false;
-      try {
-        const pcm = await synthesizeSpeechGeminiAudio(
-          res.translatedText,
-          settings.targetLanguage,
-          settings.googleApiKey,
-          settings.voiceGender,
-          'gemini-3.8-flash-lite-tts'
-        );
-        await playAudioBuffer(audioCtx, pcm);
-        played = true;
-      } catch (e) {
-        // Tier 2: Cloud TTS
-        try {
-          const cloudBuf = await synthesizeSpeechGoogleCloud(
-            res.translatedText,
-            settings.targetLanguage,
-            settings.googleApiKey,
-            settings.voiceGender,
-            settings.voiceSpeed
-          );
-          await playAudioBuffer(audioCtx, cloudBuf);
-          played = true;
-        } catch (e2) {}
-      }
-
-      // Tier 3: Browser Speech fallback
-      if (!played && 'speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-        let voices = window.speechSynthesis.getVoices();
-        const match = voices.find((v) => v.lang.toLowerCase().startsWith(settings.targetLanguage.toLowerCase()));
-        let textToSay = res.translatedText;
-        let voiceToUse = match || voices.find((v) => v.default) || voices[0];
-        if (!match && settings.targetLanguage === 'fa') {
-          textToSay = transliteratePersianToPhonetic(textToSay);
-        }
-        const u = new SpeechSynthesisUtterance(textToSay);
-        if (voiceToUse) {
-          u.voice = voiceToUse;
-          u.lang = voiceToUse.lang;
-        }
-        window.speechSynthesis.speak(u);
-      }
-
-      setTestAudioStatus('Voice verified successfully!');
-      setTimeout(() => setTestAudioStatus(null), 3000);
-    } catch (err: any) {
-      setTestAudioStatus(`Test error: ${err.message}`);
-      setTimeout(() => setTestAudioStatus(null), 4500);
-    } finally {
-      setTestingAudio(false);
-    }
+      await testVoice(settings);
+      setTestAudioStatus('Voice playback completed.');
+    } catch (error) {
+      setTestAudioStatus(error instanceof Error ? error.message : String(error));
+    } finally { setTestingAudio(false); }
   };
 
   useEffect(() => {
@@ -177,62 +107,8 @@ export default function PopupApp() {
       return;
     }
 
-    const captureTabAudio = (tab: chrome.tabs.Tab) => {
-      if (!tab?.id) return;
-      if (tab.url?.startsWith('chrome://') || tab.url?.startsWith('chrome-extension://')) {
-        alert('Cannot dub internal Chrome system pages (chrome://). Please navigate to YouTube, Meet, or any video webpage.');
-        return;
-      }
-
-      // Call tabCapture.getMediaStreamId synchronously within user gesture
-      chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id }, (streamId) => {
-        if (streamId) {
-          chrome.runtime.sendMessage({
-            type: 'START_DUBBING_WITH_STREAM',
-            streamId,
-            tabId: tab.id,
-          });
-          return;
-        }
-
-        // Secondary attempt with default options
-        chrome.tabCapture.getMediaStreamId({}, (fallbackId: string) => {
-          if (fallbackId) {
-            chrome.runtime.sendMessage({
-              type: 'START_DUBBING_WITH_STREAM',
-              streamId: fallbackId,
-              tabId: tab.id,
-            });
-            return;
-          }
-
-          console.warn('tabCapture notice:', chrome.runtime.lastError?.message);
-          chrome.runtime.sendMessage({
-            type: 'START_DUBBING',
-            tabId: tab.id,
-          });
-        });
-      });
-    };
-
-    if (targetTab?.id) {
-      captureTabAudio(targetTab);
-    } else {
-      chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
-        const t = tabs[0];
-        if (t?.id) {
-          setTargetTab(t);
-          captureTabAudio(t);
-        } else {
-          chrome.tabs.query({ active: true }, (all) => {
-            if (all[0]?.id) {
-              setTargetTab(all[0]);
-              captureTabAudio(all[0]);
-            }
-          });
-        }
-      });
-    }
+    if (isInitializing) return;
+    void chrome.runtime.sendMessage({ type: 'START_DUBBING', tabId: targetTab?.id });
   };
 
   const handleLanguageChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -284,6 +160,9 @@ export default function PopupApp() {
 
   return (
     <div className="p-4 space-y-4 select-none">
+<LiveControls settings={settings} onChange={patch => {
+          void chrome.runtime.sendMessage({ type: 'UPDATE_SETTINGS', settings: patch }).then(response => { if (response?.settings) setSettings(response.settings); });
+        }} />
       {/* Top Header */}
       <div className="flex items-center justify-between border-b border-white/10 pb-3">
         <div className="flex items-center gap-2.5">
@@ -415,11 +294,11 @@ export default function PopupApp() {
           <button
             type="button"
             onClick={handleTestAudio}
-            disabled={testingAudio}
+            disabled={testingAudio || settings.engine === 'gemini_live'}
             className="w-full py-1.5 px-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-cyan-300 font-medium flex items-center justify-center gap-1.5 transition-colors"
           >
             <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-            <span>{testingAudio ? 'Testing Voice...' : 'Test Dubbed Voice'}</span>
+            <span>{settings.engine === 'gemini_live' ? 'Live voice plays from the video tab' : testingAudio ? 'Testing Voice...' : 'Test Dubbed Voice'}</span>
           </button>
           {testAudioStatus && (
             <p className="mt-1.5 text-[11px] text-center text-cyan-200 font-medium bg-black/40 py-1 px-2 rounded-lg border border-cyan-500/20">
@@ -454,14 +333,14 @@ export default function PopupApp() {
         </div>
       </div>
 
-      {/* AI Model Selection */}
-      <div className="space-y-1.5">
+      {/* HTTP-only model configuration */}
+      {settings.engine === 'http' && <div className="space-y-1.5">
         <div className="flex items-center justify-between text-[11px] text-slate-400">
           <span className="flex items-center gap-1.5 font-medium">
-            <Sparkles className="w-3.5 h-3.5 text-indigo-400" /> AI Model
+            <Sparkles className="w-3.5 h-3.5 text-indigo-400" /> HTTP Model
           </span>
           <span className="text-[10px] text-cyan-400 font-medium">
-            {AVAILABLE_GEMINI_MODELS.find((m) => m.id === settings.geminiModel)?.badge || 'FREE'}
+            {AVAILABLE_GEMINI_MODELS.find((m) => m.id === settings.geminiModel)?.badge || 'CUSTOM'}
           </span>
         </div>
         <div className="relative">
@@ -479,6 +358,7 @@ export default function PopupApp() {
         </div>
       </div>
 
+      }
       {/* Feature Toggles */}
       <div className="grid grid-cols-2 gap-2 pt-1">
         {/* Subtitles Toggle */}
