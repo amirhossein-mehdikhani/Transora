@@ -9,7 +9,8 @@ import {
   PanelRight, 
   Layers, 
   CheckCircle2, 
-  AlertTriangle 
+  AlertTriangle,
+  Play
 } from 'lucide-react';
 import { 
   DubbingState, 
@@ -19,6 +20,13 @@ import {
   SupportedLanguage,
   AVAILABLE_GEMINI_MODELS
 } from '../types';
+import { 
+  translateTextWithGemini, 
+  synthesizeSpeechGeminiAudio, 
+  synthesizeSpeechGoogleCloud, 
+  playAudioBuffer, 
+  transliteratePersianToPhonetic 
+} from '../services/google-gemini-live';
 
 export default function PopupApp() {
   const [state, setState] = useState<DubbingState>({
@@ -33,6 +41,86 @@ export default function PopupApp() {
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [keySaveSuccess, setKeySaveSuccess] = useState(false);
   const [targetTab, setTargetTab] = useState<chrome.tabs.Tab | null>(null);
+  const [testingAudio, setTestingAudio] = useState(false);
+  const [testAudioStatus, setTestAudioStatus] = useState<string | null>(null);
+
+  const handleTestAudio = async () => {
+    if (!settings.googleApiKey || settings.googleApiKey.trim().length === 0) {
+      setShowKeyInput(true);
+      return;
+    }
+
+    setTestingAudio(true);
+    setTestAudioStatus('Translating & synthesizing voice...');
+
+    try {
+      const phrase = 'Hello! Transora live dubbing audio is working.';
+      const res = await translateTextWithGemini(
+        phrase,
+        settings.targetLanguage,
+        settings.googleApiKey,
+        settings.geminiModel || 'gemini-2.0-flash'
+      );
+
+      setTestAudioStatus(res.translatedText);
+
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+      // Tier 1: Gemini Audio
+      let played = false;
+      try {
+        const pcm = await synthesizeSpeechGeminiAudio(
+          res.translatedText,
+          settings.targetLanguage,
+          settings.googleApiKey,
+          settings.voiceGender,
+          settings.geminiModel || 'gemini-2.0-flash'
+        );
+        await playAudioBuffer(audioCtx, pcm);
+        played = true;
+      } catch (e) {
+        // Tier 2: Cloud TTS
+        try {
+          const cloudBuf = await synthesizeSpeechGoogleCloud(
+            res.translatedText,
+            settings.targetLanguage,
+            settings.googleApiKey,
+            settings.voiceGender,
+            settings.voiceSpeed
+          );
+          await playAudioBuffer(audioCtx, cloudBuf);
+          played = true;
+        } catch (e2) {}
+      }
+
+      // Tier 3: Browser Speech fallback
+      if (!played && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        let voices = window.speechSynthesis.getVoices();
+        const match = voices.find((v) => v.lang.toLowerCase().startsWith(settings.targetLanguage.toLowerCase()));
+        let textToSay = res.translatedText;
+        let voiceToUse = match || voices.find((v) => v.default) || voices[0];
+        if (!match && settings.targetLanguage === 'fa') {
+          textToSay = transliteratePersianToPhonetic(textToSay);
+        }
+        const u = new SpeechSynthesisUtterance(textToSay);
+        if (voiceToUse) {
+          u.voice = voiceToUse;
+          u.lang = voiceToUse.lang;
+        }
+        window.speechSynthesis.speak(u);
+      }
+
+      setTestAudioStatus('Voice verified successfully!');
+      setTimeout(() => setTestAudioStatus(null), 3000);
+    } catch (err: any) {
+      setTestAudioStatus(`Test error: ${err.message}`);
+      setTimeout(() => setTestAudioStatus(null), 4500);
+    } finally {
+      setTestingAudio(false);
+    }
+  };
 
   useEffect(() => {
     // Pre-fetch active video tab immediately on popup mount so click is 100% synchronous
@@ -286,6 +374,24 @@ export default function PopupApp() {
           <Power className="w-4 h-4" />
           <span>{isInitializing ? 'Initializing...' : isActive ? 'Stop Live Dubbing' : 'Start Live Dubbing'}</span>
         </button>
+
+        {/* Test Voice Diagnostic Button */}
+        <div className="pt-2">
+          <button
+            type="button"
+            onClick={handleTestAudio}
+            disabled={testingAudio}
+            className="w-full py-1.5 px-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-cyan-300 font-medium flex items-center justify-center gap-1.5 transition-colors"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+            <span>{testingAudio ? 'Testing Voice...' : 'Test Dubbed Voice'}</span>
+          </button>
+          {testAudioStatus && (
+            <p className="mt-1.5 text-[11px] text-center text-cyan-200 font-medium bg-black/40 py-1 px-2 rounded-lg border border-cyan-500/20">
+              {testAudioStatus}
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Target Language Selection & Active Model */}

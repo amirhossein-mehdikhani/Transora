@@ -1,5 +1,10 @@
 import { UserSettings, TranscriptItem } from '../types';
-import { translateAudioWithGemini, synthesizeSpeechGoogleCloud } from '../services/google-gemini-live';
+import { 
+  translateAudioWithGemini, 
+  synthesizeSpeechGoogleCloud,
+  synthesizeSpeechGeminiAudio,
+  playAudioBuffer 
+} from '../services/google-gemini-live';
 
 let audioCtx: AudioContext | null = null;
 let mediaStream: MediaStream | null = null;
@@ -275,8 +280,25 @@ async function processSpeechQueue() {
     // Apply Audio Ducking: Drop original video sound
     setAudioDucking(true, settings.duckingLevel);
 
-    // Try Google Cloud TTS first (if key supports Cloud TTS)
-    let playedViaCloudTTS = false;
+    // Tier 1: Try Gemini 2.0 Flash Native Audio (Free AI Studio Key!)
+    let playedVoice = false;
+    try {
+      const pcmBuffer = await synthesizeSpeechGeminiAudio(
+        currentItem.translatedText,
+        settings.targetLanguage as any,
+        settings.googleApiKey,
+        settings.voiceGender,
+        settings.geminiModel || 'gemini-2.0-flash'
+      );
+      await playAudioBuffer(audioCtx, pcmBuffer);
+      playedVoice = true;
+      onSpeechPlaybackDone();
+      return;
+    } catch (geminiAudioErr) {
+      // Continue to next tier
+    }
+
+    // Tier 2: Try Google Cloud TTS (For GCP Keys with Cloud TTS enabled)
     try {
       const audioBuffer = await synthesizeSpeechGoogleCloud(
         currentItem.translatedText,
@@ -285,39 +307,27 @@ async function processSpeechQueue() {
         settings.voiceGender,
         settings.voiceSpeed
       );
-
-      const decodedAudio = await audioCtx.decodeAudioData(audioBuffer);
-      const dubSource = audioCtx.createBufferSource();
-      dubSource.buffer = decodedAudio;
-      dubSource.connect(audioCtx.destination);
-
-      await new Promise<void>((resolve) => {
-        dubSource.onended = () => resolve();
-        dubSource.start();
-      });
-
-      playedViaCloudTTS = true;
+      await playAudioBuffer(audioCtx, audioBuffer);
+      playedVoice = true;
       onSpeechPlaybackDone();
-
+      return;
     } catch (ttsErr) {
       // Cloud TTS is not enabled on standard AI Studio free keys;
-      // Delegate to browser's SpeechSynthesis engine in the active tab!
-      playedViaCloudTTS = false;
+      playedVoice = false;
     }
 
-    if (!playedViaCloudTTS && activeTabId) {
-      // Request active tab to speak the translated text
+    // Tier 3: Delegate to browser SpeechSynthesis in the active tab
+    if (!playedVoice && activeTabId) {
       chrome.tabs.sendMessage(activeTabId, {
         type: 'PLAY_SPEECH_FALLBACK',
         text: currentItem.translatedText,
         lang: settings.targetLanguage,
         speed: settings.voiceSpeed,
       }).catch(() => {
-        // Fallback safety timeout if tab doesn't respond
         setTimeout(() => onSpeechPlaybackDone(), 2500);
       });
-    } else if (!playedViaCloudTTS) {
-      setTimeout(() => onSpeechPlaybackDone(), 2000);
+    } else if (!playedVoice) {
+      setTimeout(() => onSpeechPlaybackDone(), 1500);
     }
 
   } catch (err) {

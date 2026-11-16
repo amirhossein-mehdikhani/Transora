@@ -134,7 +134,8 @@ Requirements:
 Text to translate:
 "${text}"`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey.trim()}`;
+  const cleanModel = (model || 'gemini-2.0-flash').replace(/^models\//, '');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey.trim()}`;
 
   const payload = {
     contents: [
@@ -239,6 +240,134 @@ export async function synthesizeSpeechGoogleCloud(
   }
 
   return bytes.buffer;
+}
+
+/**
+ * Native Neural Audio Generation via Google Gemini 2.0 Flash API
+ * Works using standard Gemini API keys (including free Google AI Studio keys) without requiring Cloud billing!
+ */
+export async function synthesizeSpeechGeminiAudio(
+  text: string,
+  targetLang: SupportedLanguage,
+  apiKey: string,
+  gender: 'FEMALE' | 'MALE' | 'NEUTRAL' = 'FEMALE',
+  model = 'gemini-2.0-flash'
+): Promise<ArrayBuffer> {
+  const targetLangName = LANGUAGE_NAME_MAP[targetLang] || targetLang;
+  const cleanModel = (model || 'gemini-2.0-flash').replace(/^models\//, '');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey.trim()}`;
+
+  const voiceName = gender === 'MALE' ? 'Puck' : 'Aoede';
+
+  const payload = {
+    contents: [
+      {
+        parts: [
+          {
+            text: `Speak the following text aloud with natural, expressive human cadence in ${targetLangName}: "${text}"`
+          }
+        ]
+      }
+    ],
+    generationConfig: {
+      responseModalities: ['AUDIO'],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: {
+            voiceName
+          }
+        }
+      }
+    }
+  };
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => null);
+    throw new Error(err?.error?.message || `Gemini audio generation error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const part = data.candidates?.[0]?.content?.parts?.[0];
+  const audioBase64 = part?.inlineData?.data;
+  if (!audioBase64) {
+    throw new Error('Gemini response did not contain inline audio.');
+  }
+
+  const binaryString = atob(audioBase64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+
+  return bytes.buffer;
+}
+
+/**
+ * Decodes and plays raw PCM or container audio buffers into an AudioContext
+ */
+export async function playAudioBuffer(audioCtx: AudioContext, buffer: ArrayBuffer): Promise<void> {
+  if (audioCtx.state === 'suspended') {
+    await audioCtx.resume();
+  }
+
+  let decodedBuffer: AudioBuffer | null = null;
+
+  // 1. Try native Web Audio decodeAudioData (handles MP3, WAV containers)
+  try {
+    const copy = buffer.slice(0);
+    decodedBuffer = await audioCtx.decodeAudioData(copy);
+  } catch (err) {
+    // 2. If container decode fails, treat as raw 24kHz 16-bit little-endian PCM
+    try {
+      const numSamples = Math.floor(buffer.byteLength / 2);
+      const dataView = new DataView(buffer);
+      const float32 = new Float32Array(numSamples);
+      for (let i = 0; i < numSamples; i++) {
+        const int16 = dataView.getInt16(i * 2, true);
+        float32[i] = int16 < 0 ? int16 / 32768 : int16 / 32767;
+      }
+      decodedBuffer = audioCtx.createBuffer(1, numSamples, 24000);
+      decodedBuffer.getChannelData(0).set(float32);
+    } catch (pcmErr) {
+      console.warn('PCM conversion error:', pcmErr);
+      throw pcmErr;
+    }
+  }
+
+  if (!decodedBuffer) return;
+
+  const source = audioCtx.createBufferSource();
+  source.buffer = decodedBuffer;
+  source.connect(audioCtx.destination);
+
+  return new Promise<void>((resolve) => {
+    source.onended = () => resolve();
+    source.start();
+  });
+}
+
+/**
+ * Phonetic transliteration for Persian to allow Latin/English voices
+ * on platforms like Linux eSpeak/speech-dispatcher to speak audibly instead of muting!
+ */
+export function transliteratePersianToPhonetic(persian: string): string {
+  const map: Record<string, string> = {
+    'آ': 'aa', 'ا': 'a', 'ب': 'b', 'پ': 'p', 'ت': 't', 'ث': 's',
+    'ج': 'j', 'چ': 'ch', 'ح': 'h', 'خ': 'kh', 'د': 'd', 'ذ': 'z',
+    'ر': 'r', 'ز': 'z', 'ژ': 'zh', 'س': 's', 'ش': 'sh', 'ص': 's',
+    'ض': 'z', 'ط': 't', 'ظ': 'z', 'ع': 'a', 'غ': 'gh', 'ف': 'f',
+    'ق': 'gh', 'ک': 'k', 'گ': 'g', 'ل': 'l', 'م': 'm', 'ن': 'n',
+    'و': 'o', 'ه': 'h', 'ی': 'i', 'ئ': 'e', 'ي': 'i', 'ك': 'k',
+    'ة': 'e', 'ؤ': 'o', '؟': '?', '،': ',', '؛': ';'
+  };
+  return persian.split('').map((c) => (map[c] !== undefined ? map[c] : c)).join('');
 }
 
 /**

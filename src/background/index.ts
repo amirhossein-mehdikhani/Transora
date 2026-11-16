@@ -295,23 +295,39 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
 }
 
 // Global Keyboard Shortcut handler (Alt+Shift+D)
-chrome.commands?.onCommand?.addListener(async (command) => {
+chrome.commands?.onCommand?.addListener((command, tab) => {
   if (command === 'toggle-dubbing') {
     if (currentState.status === 'dubbing' || currentState.status === 'listening') {
       handleMessage({ type: 'STOP_DUBBING' }, {} as any);
+    } else if (tab && typeof tab.id === 'number') {
+      const activeId = tab.id;
+      // Direct synchronous invocation inside user gesture
+      chrome.tabCapture.getMediaStreamId({ targetTabId: activeId }, (streamId) => {
+        if (streamId) {
+          handleMessage({
+            type: 'START_DUBBING_WITH_STREAM',
+            streamId,
+            tabId: activeId,
+          }, {} as any);
+        } else if (chrome.runtime.lastError) {
+          console.warn('Tab capture error on shortcut:', chrome.runtime.lastError.message);
+        }
+      });
     } else {
-      const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-      if (activeTab?.id) {
-        chrome.tabCapture.getMediaStreamId({ targetTabId: activeTab.id }, (streamId) => {
-          if (streamId) {
-            handleMessage({
-              type: 'START_DUBBING_WITH_STREAM',
-              streamId,
-              tabId: activeTab.id!,
-            }, {} as any);
-          }
-        });
-      }
+      chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+        const activeTab = tabs[0];
+        if (activeTab?.id) {
+          chrome.tabCapture.getMediaStreamId({ targetTabId: activeTab.id }, (streamId) => {
+            if (streamId) {
+              handleMessage({
+                type: 'START_DUBBING_WITH_STREAM',
+                streamId,
+                tabId: activeTab.id!,
+              }, {} as any);
+            }
+          });
+        }
+      });
     }
   }
 });

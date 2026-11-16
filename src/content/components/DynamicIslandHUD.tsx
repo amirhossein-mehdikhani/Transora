@@ -20,6 +20,7 @@ interface DynamicIslandHUDProps {
   onLanguageChange: (lang: SupportedLanguage) => void;
   onToggleSubtitles: () => void;
   onOpenSettings: () => void;
+  onTestDubbing?: () => void;
 }
 
 export const DynamicIslandHUD: React.FC<DynamicIslandHUDProps> = ({
@@ -29,6 +30,7 @@ export const DynamicIslandHUD: React.FC<DynamicIslandHUDProps> = ({
   onLanguageChange,
   onToggleSubtitles,
   onOpenSettings,
+  onTestDubbing,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [langDropdownOpen, setLangDropdownOpen] = useState(false);
@@ -167,6 +169,17 @@ export const DynamicIslandHUD: React.FC<DynamicIslandHUDProps> = ({
               </span>
             </button>
 
+            {/* Missing API Key Warning */}
+            {(!settings.googleApiKey || settings.googleApiKey.trim().length === 0) && (
+              <div 
+                onClick={onOpenSettings}
+                className="p-2 rounded-xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-200 text-[11px] cursor-pointer hover:bg-indigo-500/25 transition-colors flex items-center justify-between"
+              >
+                <span>⚠️ Google API Key required</span>
+                <span className="text-[10px] text-cyan-300 font-semibold underline">Open Settings →</span>
+              </div>
+            )}
+
             {/* Error or Activation Notice */}
             {state.status === 'error' && state.errorMessage && (
               <div className="p-2.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-200 text-[11px] leading-snug">
@@ -220,8 +233,21 @@ export const DynamicIslandHUD: React.FC<DynamicIslandHUDProps> = ({
               )}
             </div>
 
+            {/* Test Voice Button */}
+            {onTestDubbing && (
+              <button
+                type="button"
+                onClick={onTestDubbing}
+                className="w-full py-1.5 px-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-medium text-cyan-300 flex items-center justify-center gap-1.5 transition-colors shadow-sm"
+                title="Translate & speak a sample sentence aloud to test your audio"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Test Dubbed Voice</span>
+              </button>
+            )}
+
             {/* Controls Bar */}
-            <div className="grid grid-cols-2 gap-2 pt-1">
+            <div className="grid grid-cols-2 gap-2 pt-0.5">
               {/* Subtitles Toggle */}
               <button
                 onClick={onToggleSubtitles}
@@ -242,16 +268,23 @@ export const DynamicIslandHUD: React.FC<DynamicIslandHUDProps> = ({
               </div>
             </div>
 
-            {/* Audio Wave Monitor */}
-            <div className="bg-black/30 rounded-xl p-2.5 border border-white/5 flex items-center justify-between">
-              <span className="text-[11px] text-slate-400 flex items-center gap-1.5">
-                <Headphones className="w-3.5 h-3.5 text-cyan-400" /> Tab Audio Stream
-              </span>
-              <AudioVisualizer 
-                level={state.audioLevel} 
-                isDucking={state.isDucking} 
-                active={isActive} 
-              />
+            {/* Audio Wave Monitor & Shortcut Hint */}
+            <div className="space-y-1.5">
+              <div className="bg-black/30 rounded-xl p-2.5 border border-white/5 flex items-center justify-between">
+                <span className="text-[11px] text-slate-400 flex items-center gap-1.5">
+                  <Headphones className="w-3.5 h-3.5 text-cyan-400" /> Tab Audio Stream
+                </span>
+                <AudioVisualizer 
+                  level={state.audioLevel} 
+                  isDucking={state.isDucking} 
+                  active={isActive} 
+                />
+              </div>
+
+              <div className="text-[10px] text-slate-400 flex items-center justify-between px-1">
+                <span>Direct Tab Audio Capture:</span>
+                <span className="font-mono bg-white/10 px-1.5 py-0.5 rounded text-cyan-300 font-semibold">Alt + Shift + D</span>
+              </div>
             </div>
           </div>
         )}

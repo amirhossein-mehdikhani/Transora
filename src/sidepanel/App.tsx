@@ -38,6 +38,13 @@ import {
   testGoogleApiKey,
   fetchLiveGeminiModels
 } from '../services/storage';
+import { 
+  translateTextWithGemini, 
+  synthesizeSpeechGeminiAudio, 
+  synthesizeSpeechGoogleCloud, 
+  playAudioBuffer, 
+  transliteratePersianToPhonetic 
+} from '../services/google-gemini-live';
 
 export default function SidePanelApp() {
   const [activeTab, setActiveTab] = useState<'transcripts' | 'audio' | 'api'>('transcripts');
@@ -65,6 +72,84 @@ export default function SidePanelApp() {
     isDucking: false,
     stats: { latencyMs: 0, sentencesDubbed: 0, bytesProcessed: 0 },
   });
+
+  const [testingVoice, setTestingVoice] = useState(false);
+  const [testVoiceMsg, setTestVoiceMsg] = useState<string | null>(null);
+
+  const handleTestVoice = async () => {
+    if (!settings.googleApiKey) {
+      setActiveTab('api');
+      return;
+    }
+
+    setTestingVoice(true);
+    setTestVoiceMsg('Synthesizing test voice...');
+
+    try {
+      const phrase = 'Transora live neural voice test.';
+      const res = await translateTextWithGemini(
+        phrase,
+        settings.targetLanguage,
+        settings.googleApiKey,
+        settings.geminiModel || 'gemini-2.0-flash'
+      );
+
+      setTestVoiceMsg(res.translatedText);
+
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+      let played = false;
+      try {
+        const pcm = await synthesizeSpeechGeminiAudio(
+          res.translatedText,
+          settings.targetLanguage,
+          settings.googleApiKey,
+          settings.voiceGender,
+          settings.geminiModel || 'gemini-2.0-flash'
+        );
+        await playAudioBuffer(audioCtx, pcm);
+        played = true;
+      } catch (e) {
+        try {
+          const cloudBuf = await synthesizeSpeechGoogleCloud(
+            res.translatedText,
+            settings.targetLanguage,
+            settings.googleApiKey,
+            settings.voiceGender,
+            settings.voiceSpeed
+          );
+          await playAudioBuffer(audioCtx, cloudBuf);
+          played = true;
+        } catch (e2) {}
+      }
+
+      if (!played && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        let voices = window.speechSynthesis.getVoices();
+        const match = voices.find((v) => v.lang.toLowerCase().startsWith(settings.targetLanguage.toLowerCase()));
+        let textToSay = res.translatedText;
+        let voiceToUse = match || voices.find((v) => v.default) || voices[0];
+        if (!match && settings.targetLanguage === 'fa') {
+          textToSay = transliteratePersianToPhonetic(textToSay);
+        }
+        const u = new SpeechSynthesisUtterance(textToSay);
+        if (voiceToUse) {
+          u.voice = voiceToUse;
+          u.lang = voiceToUse.lang;
+        }
+        window.speechSynthesis.speak(u);
+      }
+
+      setTestVoiceMsg('Voice output verified!');
+      setTimeout(() => setTestVoiceMsg(null), 3500);
+    } catch (err: any) {
+      setTestVoiceMsg(`Error: ${err.message}`);
+      setTimeout(() => setTestVoiceMsg(null), 4500);
+    } finally {
+      setTestingVoice(false);
+    }
+  };
 
   useEffect(() => {
     // Load initial settings and transcripts
@@ -435,6 +520,24 @@ export default function SidePanelApp() {
                 onChange={(e) => handleUpdateSetting('voiceSpeed', parseFloat(e.target.value))}
                 className="w-full accent-indigo-400 cursor-pointer"
               />
+            </div>
+
+            {/* Test Voice Diagnostic Button */}
+            <div className="pt-2 border-t border-white/5 space-y-2">
+              <button
+                type="button"
+                onClick={handleTestVoice}
+                disabled={testingVoice}
+                className="w-full py-2 px-3 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 text-cyan-300 font-medium flex items-center justify-center gap-2 transition-colors"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                <span>{testingVoice ? 'Synthesizing voice...' : 'Test Neural Voice'}</span>
+              </button>
+              {testVoiceMsg && (
+                <p className="text-[11px] text-center text-cyan-200 bg-black/40 py-1 px-2 rounded-lg border border-cyan-500/20 font-medium">
+                  {testVoiceMsg}
+                </p>
+              )}
             </div>
           </div>
 
