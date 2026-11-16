@@ -85,9 +85,9 @@ export default function SidePanelApp() {
     setTestingVoice(true);
     setTestVoiceMsg('Synthesizing test voice...');
 
-    const modelToUse = (settings.geminiModel || 'gemini-3.8-flash').includes('gemini-2.0')
-      ? 'gemini-3.8-flash'
-      : settings.geminiModel || 'gemini-3.8-flash';
+    const modelToUse = (settings.geminiModel && !settings.geminiModel.includes('gemini-2.0') && settings.geminiModel !== 'gemini-3.8-flash')
+      ? settings.geminiModel
+      : 'gemini-flash-lite-latest';
 
     try {
       const phrase = 'Transora live neural voice test.';
@@ -110,7 +110,7 @@ export default function SidePanelApp() {
           settings.targetLanguage,
           settings.googleApiKey,
           settings.voiceGender,
-          modelToUse
+          'gemini-3.8-flash-lite-tts'
         );
         await playAudioBuffer(audioCtx, pcm);
         played = true;

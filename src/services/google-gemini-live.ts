@@ -56,7 +56,11 @@ If no speech:
 }`;
 
   let cleanModel = (model || 'gemini-flash-lite-latest').replace(/^models\//, '');
-  if (cleanModel.includes('gemini-2.0') || cleanModel.includes('gemini-2.5-flash')) {
+  if (
+    cleanModel.includes('gemini-2.0') || 
+    cleanModel.includes('gemini-2.5-flash') ||
+    cleanModel === 'gemini-3.8-flash'
+  ) {
     cleanModel = 'gemini-flash-lite-latest';
   }
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey.trim()}`;
@@ -142,21 +146,31 @@ Text to translate:
 "${text}"`;
 
   let cleanModel = (model || 'gemini-flash-lite-latest').replace(/^models\//, '');
-  if (cleanModel.includes('gemini-2.0') || cleanModel.includes('gemini-2.5-flash')) {
+  if (
+    cleanModel.includes('gemini-2.0') || 
+    cleanModel.includes('gemini-2.5-flash') ||
+    cleanModel === 'gemini-3.8-flash'
+  ) {
     cleanModel = 'gemini-flash-lite-latest';
   }
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey.trim()}`;
 
   const payload = {
+    systemInstruction: {
+      parts: [
+        {
+          text: `You are a real-time live video dubbing engine. Translate the input spoken speech directly into natural, conversational, fluent ${targetLangName}. Output ONLY the translated speech line without any explanations, alternatives, notes, quotes, or markdown.`
+        }
+      ]
+    },
     contents: [
       {
-        parts: [{ text: prompt }]
+        parts: [{ text }]
       }
     ],
     generationConfig: {
-      temperature: 0.2,
+      temperature: 0.1,
       maxOutputTokens: 250,
-      topP: 0.8,
     }
   };
 
@@ -177,7 +191,7 @@ Text to translate:
 
   const data = await response.json();
   const rawTranslation = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  const cleanTranslation = rawTranslation.trim().replace(/^["']|["']$/g, '');
+  const cleanTranslation = rawTranslation.trim().replace(/^["'«»]|["'«»]$/g, '').trim();
 
   const latencyMs = Math.round(performance.now() - startTime);
 
@@ -285,6 +299,13 @@ export async function synthesizeSpeechGeminiAudio(
     ],
     generationConfig: {
       responseModalities: ['AUDIO'],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: {
+            voiceName: gender === 'MALE' ? 'Puck' : 'Kore'
+          }
+        }
+      }
     }
   };
 
@@ -295,16 +316,17 @@ export async function synthesizeSpeechGeminiAudio(
   });
 
   if (!response.ok) {
-    if (cleanModel !== 'gemini-3.8-flash-tts') {
-      return synthesizeSpeechGeminiAudio(text, targetLang, apiKey, gender, 'gemini-3.8-flash-tts');
+    if (cleanModel !== 'gemini-3.1-flash-tts-preview') {
+      return synthesizeSpeechGeminiAudio(text, targetLang, apiKey, gender, 'gemini-3.1-flash-tts-preview');
     }
     const err = await response.json().catch(() => null);
     throw new Error(err?.error?.message || `Gemini audio generation error: ${response.status}`);
   }
 
   const data = await response.json();
-  const part = data.candidates?.[0]?.content?.parts?.[0];
-  const audioBase64 = part?.inlineData?.data;
+  const parts = data.candidates?.[0]?.content?.parts || [];
+  const audioPart = parts.find((p: any) => p?.inlineData?.data);
+  const audioBase64 = audioPart?.inlineData?.data;
   if (!audioBase64) {
     throw new Error('Gemini response did not contain inline audio.');
   }

@@ -53,9 +53,9 @@ export default function PopupApp() {
     setTestingAudio(true);
     setTestAudioStatus('Translating & synthesizing voice...');
 
-    const modelToUse = (settings.geminiModel || 'gemini-3.8-flash').includes('gemini-2.0')
-      ? 'gemini-3.8-flash'
-      : settings.geminiModel || 'gemini-3.8-flash';
+    const modelToUse = (settings.geminiModel && !settings.geminiModel.includes('gemini-2.0') && settings.geminiModel !== 'gemini-3.8-flash')
+      ? settings.geminiModel
+      : 'gemini-flash-lite-latest';
 
     try {
       const phrase = 'Hello! Transora live dubbing audio is working.';
@@ -79,7 +79,7 @@ export default function PopupApp() {
           settings.targetLanguage,
           settings.googleApiKey,
           settings.voiceGender,
-          modelToUse
+          'gemini-3.8-flash-lite-tts'
         );
         await playAudioBuffer(audioCtx, pcm);
         played = true;
@@ -177,40 +177,50 @@ export default function PopupApp() {
       return;
     }
 
-    const currentTab = targetTab;
-    if (!currentTab || !currentTab.id) {
-      console.warn('Target tab not ready yet, retrying query...');
-      chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
-        if (tabs[0]?.id) {
-          setTargetTab(tabs[0]);
-          chrome.runtime.sendMessage({ type: 'START_DUBBING', tabId: tabs[0].id });
-        }
-      });
-      return;
-    }
-
-    if (currentTab.url?.startsWith('chrome://') || currentTab.url?.startsWith('chrome-extension://')) {
-      alert('Cannot dub internal Chrome system pages (chrome://). Please navigate to YouTube, Meet, or any video webpage.');
-      return;
-    }
-
-    // Call tabCapture.getMediaStreamId IMMEDIATELY and SYNCHRONOUSLY inside the click event
-    chrome.tabCapture.getMediaStreamId({ targetTabId: currentTab.id }, (streamId) => {
-      if (chrome.runtime.lastError || !streamId) {
-        console.warn('tabCapture notice:', chrome.runtime.lastError?.message);
-        chrome.runtime.sendMessage({
-          type: 'START_DUBBING',
-          tabId: currentTab.id,
-        });
+    const captureTabAudio = (tab: chrome.tabs.Tab) => {
+      if (!tab?.id) return;
+      if (tab.url?.startsWith('chrome://') || tab.url?.startsWith('chrome-extension://')) {
+        alert('Cannot dub internal Chrome system pages (chrome://). Please navigate to YouTube, Meet, or any video webpage.');
         return;
       }
 
-      chrome.runtime.sendMessage({
-        type: 'START_DUBBING_WITH_STREAM',
-        streamId,
-        tabId: currentTab.id,
+      // Call tabCapture.getMediaStreamId synchronously within user gesture
+      chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id }, (streamId) => {
+        if (chrome.runtime.lastError || !streamId) {
+          console.warn('tabCapture notice:', chrome.runtime.lastError?.message);
+          chrome.runtime.sendMessage({
+            type: 'START_DUBBING',
+            tabId: tab.id,
+          });
+          return;
+        }
+
+        chrome.runtime.sendMessage({
+          type: 'START_DUBBING_WITH_STREAM',
+          streamId,
+          tabId: tab.id,
+        });
       });
-    });
+    };
+
+    if (targetTab?.id) {
+      captureTabAudio(targetTab);
+    } else {
+      chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+        const t = tabs[0];
+        if (t?.id) {
+          setTargetTab(t);
+          captureTabAudio(t);
+        } else {
+          chrome.tabs.query({ active: true }, (all) => {
+            if (all[0]?.id) {
+              setTargetTab(all[0]);
+              captureTabAudio(all[0]);
+            }
+          });
+        }
+      });
+    }
   };
 
   const handleLanguageChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -444,7 +454,7 @@ export default function PopupApp() {
         </div>
         <div className="relative">
           <select
-            value={settings.geminiModel || 'gemini-3.8-flash'}
+            value={settings.geminiModel || 'gemini-flash-lite-latest'}
             onChange={handleModelChange}
             className="w-full appearance-none bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-400 cursor-pointer"
           >

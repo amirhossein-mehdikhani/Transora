@@ -56,7 +56,7 @@ async function playDubbedAudio(
   apiKey: string,
   speed = 1.0,
   gender: 'FEMALE' | 'MALE' | 'NEUTRAL' = 'FEMALE',
-  model = 'gemini-3.8-flash',
+  model = 'gemini-flash-lite-latest',
   onStart?: () => void,
   onEnd?: () => void
 ) {
@@ -70,10 +70,10 @@ async function playDubbedAudio(
     await audioContextInstance.resume();
   }
 
-  // Tier 1: Try Gemini 2.0 Flash Native Audio (Free AI Studio Key, works for Persian & all languages!)
+  // Tier 1: Try Gemini Flash Lite TTS Studio Audio (Free AI Studio Key, works for Persian & all languages!)
   if (apiKey && apiKey.trim().length > 0) {
     try {
-      const pcmBuffer = await synthesizeSpeechGeminiAudio(text, targetLang, apiKey, gender, model);
+      const pcmBuffer = await synthesizeSpeechGeminiAudio(text, targetLang, apiKey, gender, 'gemini-3.8-flash-lite-tts');
       await playAudioBuffer(audioContextInstance, pcmBuffer);
       isSpeakingDub = false;
       onEnd?.();
@@ -247,7 +247,7 @@ function initTransoraContent() {
             settings.googleApiKey,
             msg.speed || settings.voiceSpeed,
             settings.voiceGender,
-            settings.geminiModel || 'gemini-3.8-flash',
+            settings.geminiModel || 'gemini-flash-lite-latest',
             () => {
               setState((prev) => ({ ...prev, isDucking: true, audioLevel: 85 }));
             },
@@ -278,12 +278,12 @@ function initTransoraContent() {
           audioLevel: 50,
         }));
 
-        // Fast neural translation via Gemini Flash
+        // Fast neural translation via Gemini Flash Lite
         const result = await translateTextWithGemini(
           cleanSentence,
           settings.targetLanguage,
           settings.googleApiKey,
-          settings.geminiModel || 'gemini-3.8-flash'
+          settings.geminiModel || 'gemini-flash-lite-latest'
         );
 
         if (!result.translatedText || result.translatedText.trim().length === 0) return;
@@ -321,7 +321,7 @@ function initTransoraContent() {
           settings.googleApiKey,
           settings.voiceSpeed,
           settings.voiceGender,
-          settings.geminiModel || 'gemini-3.8-flash',
+          settings.geminiModel || 'gemini-flash-lite-latest',
           () => {
             setState((prev) => ({ ...prev, isDucking: true, audioLevel: 80 }));
           },
@@ -375,13 +375,19 @@ function initTransoraContent() {
           if (subBtn && subBtn.getAttribute('aria-pressed') !== 'true') {
             subBtn.click();
           }
+          try {
+            if (typeof (moviePlayer as any).toggleSubtitlesOn === 'function') {
+              (moviePlayer as any).toggleSubtitlesOn();
+            }
+          } catch (_) {}
 
           // Hide YouTube native ugly caption box
           const overrideStyle = document.createElement('style');
           overrideStyle.id = 'transora-yt-caption-override';
           overrideStyle.textContent = `
-            .ytp-caption-window-bottom {
+            .ytp-caption-window-bottom, .caption-window {
               opacity: 0.01 !important;
+              pointer-events: none !important;
             }
           `;
           document.head.appendChild(overrideStyle);
@@ -389,6 +395,7 @@ function initTransoraContent() {
           let accumulatedSentence = '';
           let lastDispatchedSentence = '';
           let pauseTimer: any = null;
+          let anyCaptionsDetected = false;
 
           const flushSentence = () => {
             const candidate = accumulatedSentence.trim();
@@ -400,7 +407,7 @@ function initTransoraContent() {
           };
 
           ytCaptionObserver = new MutationObserver(() => {
-            const segments = moviePlayer.querySelectorAll('.ytp-caption-segment, .caption-visual-line');
+            const segments = moviePlayer.querySelectorAll('.ytp-caption-segment, .caption-visual-line, .captions-text');
             if (segments.length === 0) {
               // Flush any buffered sentence immediately if YouTube clears the window
               if (accumulatedSentence.trim().length > 2) {
@@ -410,6 +417,7 @@ function initTransoraContent() {
               return;
             }
 
+            anyCaptionsDetected = true;
             let currentCaption = '';
             segments.forEach((s) => { currentCaption += (s.textContent || '') + ' '; });
             currentCaption = currentCaption.trim();
@@ -432,6 +440,21 @@ function initTransoraContent() {
             subtree: true,
             characterData: true,
           });
+
+          // Watchdog timer: If after 3.5 seconds no captions are detected, alert user to press Alt+Shift+D
+          setTimeout(() => {
+            if (!anyCaptionsDetected && ytCaptionObserver) {
+              setState((prev) => {
+                if (prev.status === 'dubbing' && !prev.currentOriginalText) {
+                  return {
+                    ...prev,
+                    errorMessage: 'Subtitles not detected on this video. Press Alt+Shift+D or click Transora icon in Chrome toolbar to capture audio directly!',
+                  };
+                }
+                return prev;
+              });
+            }
+          }, 3500);
 
           speechSourceStarted = true;
           setState((prev) => ({
@@ -488,7 +511,7 @@ function initTransoraContent() {
                       mimeType,
                       settings.targetLanguage,
                       settings.googleApiKey,
-                      settings.geminiModel || 'gemini-3.8-flash'
+                      settings.geminiModel || 'gemini-flash-lite-latest'
                     );
 
                     if (translation.speechDetected && translation.translatedText.trim()) {
@@ -565,7 +588,7 @@ function initTransoraContent() {
           testPhrase,
           settings.targetLanguage,
           settings.googleApiKey,
-          settings.geminiModel || 'gemini-3.8-flash'
+          settings.geminiModel || 'gemini-flash-lite-latest'
         );
 
         setState((prev) => ({
@@ -580,7 +603,7 @@ function initTransoraContent() {
           settings.googleApiKey,
           settings.voiceSpeed,
           settings.voiceGender,
-          settings.geminiModel || 'gemini-3.8-flash',
+          settings.geminiModel || 'gemini-flash-lite-latest',
           () => setState((p) => ({ ...p, isDucking: true, audioLevel: 90 })),
           () => setState((p) => ({ ...p, isDucking: false, audioLevel: 0, status: 'idle' }))
         );

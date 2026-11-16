@@ -220,7 +220,7 @@ async function handleAudioChunk(blob: Blob, mimeType: string) {
       mimeType,
       currentSettings.targetLanguage,
       currentSettings.googleApiKey,
-      currentSettings.geminiModel || 'gemini-3.8-flash'
+      currentSettings.geminiModel || 'gemini-flash-lite-latest'
     );
 
     if (translation.speechDetected && translation.translatedText.trim().length > 0) {
@@ -288,7 +288,7 @@ async function processSpeechQueue() {
         settings.targetLanguage as any,
         settings.googleApiKey,
         settings.voiceGender,
-        settings.geminiModel || 'gemini-3.8-flash'
+        'gemini-3.8-flash-lite-tts'
       );
       await playAudioBuffer(audioCtx, pcmBuffer);
       playedVoice = true;
