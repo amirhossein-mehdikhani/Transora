@@ -53,3 +53,15 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prune old releases (keep latest 5)
+        run: |
+          OLD_TAGS=$(gh release list --limit 100 --json tagName --jq '.[5:][].tagName')
+          for tag in $OLD_TAGS; do
+            if [ -n "$tag" ]; then
+              echo "Pruning older release and remote tag: $tag"
+              gh release delete "$tag" --cleanup-tag --yes
+            fi
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
