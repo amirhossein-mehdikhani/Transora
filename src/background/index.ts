@@ -79,7 +79,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       const previous = settings;
       settings = await saveStoredSettings(message.settings);
       // Live connection configuration is fixed at setup: stop rather than silently using stale language/model/key.
-      if (sessionId && (previous.engine !== settings.engine || (previous.engine === 'gemini_live' && ['liveModel', 'targetLanguage', 'sourceLanguage', 'googleApiKey', 'voiceGender', 'voiceSpeed'].some(key => previous[key as keyof UserSettings] !== settings[key as keyof UserSettings])))) {
+      if (sessionId && (previous.engine !== settings.engine || (previous.engine === 'gemini_live' && ['liveModel', 'targetLanguage', 'sourceLanguage', 'googleApiKey', 'voiceGender', 'liveVoiceName', 'voiceSpeed'].some(key => previous[key as keyof UserSettings] !== settings[key as keyof UserSettings])))) {
         const result = operation.then(stop);
         operation = result.catch(() => {});
         await result;

@@ -8,6 +8,8 @@ export function validateSettings(input: Partial<UserSettings>): UserSettings {
   const clamp = (n: number, low: number, high: number, fallback: number) => Number.isFinite(n) ? Math.max(low, Math.min(high, n)) : fallback;
   return {
     ...DEFAULT_SETTINGS,
+    hudVisible: typeof value.hudVisible === 'boolean' ? value.hudVisible : true,
+    liveVoiceName: ['Kore', 'Puck', 'Aoede', 'Charon'].includes(value.liveVoiceName) ? value.liveVoiceName : 'Kore',
     engine: value.engine === 'http' ? 'http' : 'gemini_live',
     liveModel: typeof value.liveModel === 'string' && /^[a-zA-Z0-9._-]+$/.test(value.liveModel) ? value.liveModel : DEFAULT_SETTINGS.liveModel,
     googleApiKey: typeof value.googleApiKey === 'string' ? value.googleApiKey.trim() : '',

@@ -19,7 +19,7 @@ function ContentApp() {
         if (['idle', 'error'].includes(message.state.status)) { speech?.abort(); setOwned(false); }
         else setOwned(true);
       } else if (message.type === 'SETTINGS_UPDATED') setSettings(message.settings);
-      else if (message.type === 'NEW_TRANSCRIPT') setState(previous => ({ ...previous, currentOriginalText: captionWindow(message.item.originalText, 80), currentTranslatedText: message.item.kind === 'transcription' ? captionWindow(message.item.originalText, 80) : captionWindow(message.item.translatedText, 120) }));
+      else if (message.type === 'NEW_TRANSCRIPT' && message.item.kind !== 'translation') setState(previous => ({ ...previous, currentOriginalText: captionWindow(message.item.originalText, 80), currentTranslatedText: message.item.kind === 'transcription' ? captionWindow(message.item.originalText, 80) : captionWindow(message.item.translatedText, 120) }));
       else if (message.type === 'GET_MEDIA_TIME') {
         const video = document.querySelector('video');
         respond({ timeMs: video && Number.isFinite(video.currentTime) ? video.currentTime * 1000 : undefined });
@@ -46,7 +46,7 @@ function ContentApp() {
   }, []);
   const update = (patch: Partial<UserSettings>) => { void chrome.runtime.sendMessage({ type: 'UPDATE_SETTINGS', settings: patch }); };
   return <>
-    <DynamicIslandHUD state={state} settings={settings}
+    {settings.hudVisible && <DynamicIslandHUD state={state} settings={settings}
       onToggleDubbing={() => {
         void chrome.runtime.sendMessage({ type: owned && ['initializing', 'dubbing', 'listening'].includes(state.status) ? 'STOP_DUBBING' : 'START_DUBBING' })
           .then(response => { if (response?.success === false) setState(previous => ({ ...previous, status: 'error', errorMessage: response.error })); })
@@ -54,7 +54,8 @@ function ContentApp() {
       }}
       onLanguageChange={targetLanguage => update({ targetLanguage })}
       onToggleSubtitles={() => update({ subtitlesEnabled: !settings.subtitlesEnabled })}
-      onOpenSettings={() => { void chrome.runtime.sendMessage({ type: 'OPEN_SIDEPANEL' }); }} />
+      onHide={() => update({ hudVisible: false })}
+      onOpenSettings={() => { void chrome.runtime.sendMessage({ type: 'OPEN_SIDEPANEL' }); }} />}
     <SubtitleOverlay originalText={state.currentOriginalText} translatedText={state.currentTranslatedText} targetLang={settings.targetLanguage}
       bilingual={settings.bilingualSubtitles} visible={owned && settings.subtitlesEnabled && ['listening', 'dubbing'].includes(state.status)} />
   </>;

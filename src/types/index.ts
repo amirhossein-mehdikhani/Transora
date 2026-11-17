@@ -63,6 +63,8 @@ export const LIVE_MODELS = [
 export interface UserSettings {
   engine: 'gemini_live' | 'http';
   liveModel: string;
+  liveVoiceName: 'Kore' | 'Puck' | 'Aoede' | 'Charon';
+  hudVisible: boolean;
   googleApiKey: string;
   geminiModel: string;
   sourceLanguage: string; // 'auto' or code
@@ -78,6 +80,8 @@ export interface UserSettings {
 
 export const DEFAULT_SETTINGS: UserSettings = {
   engine: 'gemini_live',
+  hudVisible: true,
+  liveVoiceName: 'Kore',
   liveModel: 'gemini-3.5-live-translate-preview',
   googleApiKey: '',
   geminiModel: 'gemini-flash-lite-latest',

@@ -1,6 +1,6 @@
 {
   "name": "transora",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Real-Time AI Video Dubbing & Live Voice Streaming Chrome Extension",
   "private": true,
   "type": "module",

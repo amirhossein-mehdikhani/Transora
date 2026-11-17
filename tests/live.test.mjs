@@ -101,3 +101,26 @@ test('continuous translation persists captions without waiting for a conversatio
   assert.equal(liveSetup(DEFAULT_SETTINGS).setup.realtimeInputConfig.activityHandling, 'NO_INTERRUPTION');
   session.close();
 });
+
+test('source-only events and history flushes do not clear the translated subtitle', async () => {
+  const { session, updates } = fixture();
+  await open(session);
+  const translated = 'This is a full translated sentence with enough words.';
+  socket.onmessage({ data: JSON.stringify({ serverContent: { inputTranscription: { text: 'source first' }, outputTranscription: { text: translated }, turnComplete: true } }) });
+  await new Promise(resolve => setTimeout(resolve, 120));
+  const caption = updates.findLast(update => update.currentTranslatedText);
+  assert.equal(caption.currentTranslatedText, translated);
+  const count = updates.filter(update => 'currentTranslatedText' in update).length;
+  socket.onmessage({ data: JSON.stringify({ serverContent: { inputTranscription: { text: 'next source still speaking' } } }) });
+  await new Promise(resolve => setTimeout(resolve, 120));
+  assert.equal(updates.filter(update => 'currentTranslatedText' in update).length, count);
+  session.close();
+});
+test('narrator choice is pinned in dialogue setup and translation mode keeps its specialized configuration', () => {
+  const narrator = liveSetup({ ...DEFAULT_SETTINGS, liveModel: 'gemini-3.8-live', liveVoiceName: 'Charon' }).setup;
+  assert.equal(narrator.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName, 'Charon');
+  assert.match(narrator.systemInstruction.parts[0].text, /same narrator voice/);
+  const translate = liveSetup(DEFAULT_SETTINGS).setup;
+  assert.equal(translate.generationConfig.speechConfig, undefined, 'do not pretend Live Translate guarantees a fixed narrator');
+  assert.equal(translate.generationConfig.translationConfig.targetLanguageCode, 'fa');
+});

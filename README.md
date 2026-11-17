@@ -240,3 +240,13 @@ Transora/
 ## 📄 License
 
 Distributed under the **MIT License**. Designed and engineered with precision for real-time multilingual AI video experiences.
+
+## Controls, subtitle behavior, and voice consistency (1.1.2)
+
+Use the eye-off button in the floating HUD to hide it. Use **Show floating controls** in the toolbar popup or studio to restore it. This preference is saved and does not stop capture, voice output, or subtitles. The separate Subtitles toggle controls captions.
+
+Live captions have one display path: saved transcript history cannot overwrite them, and a source-only transcription event no longer clears an already translated line. Captions wrap rather than silently clipping their last lines. Google sends source/output transcripts independently; exact bilingual timing is still best-effort.
+
+Google documents voice shifts as a Live Translate limitation, especially after pauses and in multi-speaker speech. **Use fixed narrator — Gemini 3.8 Live** switches to a dialogue model with interpreter instructions and a selected prebuilt narrator voice (Kore, Puck, Aoede or Charon). The choice is fixed for the connection. Changing it stops the session so it cannot switch mid-conversation. Start again after selecting. This can improve voice consistency but cannot guarantee model behavior, and dialogue models can still omit or answer speech; the dedicated translation model remains available. No extra HTTP translation or TTS calls are introduced.
+
+References: [Live Translate limitations](https://aistudio.google.com/docs/live-api/live-translate#limitations), [Live voice configuration](https://ai.google.dev/gemini-api/docs/live-api/capabilities).

@@ -10,6 +10,7 @@ import {
   ChevronDown, 
   ChevronUp, 
   Globe2,
+  EyeOff,
   Headphones
 } from 'lucide-react';
 
@@ -20,6 +21,7 @@ interface DynamicIslandHUDProps {
   onLanguageChange: (lang: SupportedLanguage) => void;
   onToggleSubtitles: () => void;
   onOpenSettings: () => void;
+  onHide: () => void;
   onTestDubbing?: () => void;
 }
 
@@ -31,6 +33,7 @@ export const DynamicIslandHUD: React.FC<DynamicIslandHUDProps> = ({
   onToggleSubtitles,
   onOpenSettings,
   onTestDubbing,
+  onHide,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [langDropdownOpen, setLangDropdownOpen] = useState(false);
@@ -110,6 +113,8 @@ export const DynamicIslandHUD: React.FC<DynamicIslandHUDProps> = ({
               <Power className="w-3.5 h-3.5" />
             </button>
 
+<button type="button" onClick={onHide} title="Hide floating controls; dubbing continues" aria-label="Hide floating controls"
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-white/10"><EyeOff className="w-3.5 h-3.5" /></button>
             {/* Expand Arrow */}
             <button
               onClick={() => setIsExpanded(true)}
@@ -133,6 +138,8 @@ export const DynamicIslandHUD: React.FC<DynamicIslandHUDProps> = ({
               </div>
 
               <div className="flex items-center gap-1">
+<button type="button" onClick={onHide} title="Hide floating controls; dubbing continues" aria-label="Hide floating controls"
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-white/10"><EyeOff className="w-3.5 h-3.5" /></button>
                 <button
                   onClick={onOpenSettings}
                   className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors"

@@ -58,3 +58,14 @@ test('shortcut invokes session lifecycle directly rather than sending a message 
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal((await request({ type: 'GET_STATE' })).state.status, 'idle');
 });
+
+test('hiding floating controls does not stop the live session', async () => {
+  await request({ type: 'START_DUBBING', tabId: 7 });
+  const before = snapshot.session.sessionId;
+  const hidden = await request({ type: 'UPDATE_SETTINGS', settings: { hudVisible: false } });
+  assert.equal(hidden.settings.hudVisible, false);
+  assert.equal((await request({ type: 'GET_STATE' })).state.status, 'listening');
+  assert.equal(snapshot.session.sessionId, before);
+  await request({ type: 'UPDATE_SETTINGS', settings: { hudVisible: true } });
+  await request({ type: 'STOP_DUBBING' });
+});
